@@ -29,8 +29,19 @@ if [[ -z "$ver" ]] || [[ "$ver" < "3 9" ]]; then
 fi
 
 echo "Setting up yt-artist..."
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$BIN_DIR"
+if ! mkdir -p "$INSTALL_DIR" 2>/dev/null || ! mkdir -p "$BIN_DIR" 2>/dev/null; then
+  echo "Error: Cannot create $INSTALL_DIR or $BIN_DIR (permission denied)." >&2
+  echo "" >&2
+  echo "Fix: use the developer setup instead:" >&2
+  echo "  cd $(pwd)" >&2
+  echo "  python3 -m venv .venv && source .venv/bin/activate" >&2
+  echo "  pip install -e \".[dev]\"" >&2
+  echo "  yt-artist --help" >&2
+  echo "" >&2
+  echo "Or override the install directory:" >&2
+  echo "  INSTALL_DIR=/tmp/yt-artist BIN_DIR=/tmp/bin ./scripts/install-mac.sh" >&2
+  exit 1
+fi
 VENV="$INSTALL_DIR/venv"
 
 if [[ ! -d "$VENV" ]]; then

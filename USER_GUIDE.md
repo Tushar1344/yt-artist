@@ -107,7 +107,7 @@ export DB=./yt.db
 
 | Command | Description |
 |--------|-------------|
-| `fetch-channel` / `urllist` \<channel_url\> | Bulk-pull all video URLs for the channel; writes urllist and updates DB. |
+| `fetch-channel` / `urllist` \<channel_url\> | Bulk-pull all video URLs for the channel; writes urllist and updates DB. Large channels (1000+ videos) may take a few minutes. |
 | `transcribe` [video_url \| --artist-id @X] | Per-video: transcribe one video. Bulk: transcribe all videos for the artist (fetches urllist if missing). Optional `--write-file`. |
 | `summarize` [video \| --artist-id @X] [--prompt ID] | Per-video: summarize one video (adds artist/video/transcript if missing). Bulk: summarize all transcribed videos for the artist. Prompt: `--prompt` else artist default else `YT_ARTIST_DEFAULT_PROMPT` else first prompt. |
 | `set-default-prompt --artist-id @X --prompt ID` | Set the default prompt for an artist (used when `--prompt` is not passed to summarize). |
@@ -123,6 +123,8 @@ export DB=./yt.db
 | `doctor` | Check your setup: yt-dlp installation, YouTube authentication, PO token, LLM endpoint, test metadata fetch. |
 
 **Global options:** `--db PATH`, `--data-dir PATH`, `--bg` (run in background), `-q`/`--quiet` (suppress hints)
+
+> **Note:** Global options must appear **before** the subcommand. For example: `yt-artist --quiet summarize ...` (correct), not `yt-artist summarize ... --quiet` (error).
 
 ---
 
