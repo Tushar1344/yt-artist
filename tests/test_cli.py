@@ -326,3 +326,94 @@ class TestSearchTranscripts:
         assert code == 0
         captured = capfd.readouterr()
         assert "testvid00001" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# CLI: doctor
+# ---------------------------------------------------------------------------
+
+class TestDoctor:
+
+    def test_doctor_runs_successfully(self, tmp_path, capfd):
+        """doctor command should complete without error."""
+        db = tmp_path / "test.db"
+        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+             patch("subprocess.run") as mock_run, \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch.dict(os.environ, {}, clear=False):
+            mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+
+    def test_doctor_shows_five_sections(self, tmp_path, capfd):
+        """doctor should show all 5 check sections."""
+        db = tmp_path / "test.db"
+        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+             patch("subprocess.run") as mock_run, \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch.dict(os.environ, {}, clear=False):
+            mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "[1/5]" in captured.out
+        assert "[2/5]" in captured.out
+        assert "[3/5]" in captured.out
+        assert "[4/5]" in captured.out
+        assert "[5/5]" in captured.out
+
+    def test_doctor_detects_missing_yt_dlp(self, tmp_path, capfd):
+        """doctor should FAIL when yt-dlp is not installed."""
+        db = tmp_path / "test.db"
+        with patch("shutil.which", return_value=None), \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch.dict(os.environ, {}, clear=False):
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "FAIL" in captured.out
+        assert "yt-dlp not found" in captured.out
+
+    def test_doctor_shows_auth_config(self, tmp_path, capfd):
+        """doctor should show cookies and PO token status."""
+        db = tmp_path / "test.db"
+        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+             patch("subprocess.run") as mock_run, \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch.dict(os.environ, {
+                 "YT_ARTIST_COOKIES_BROWSER": "chrome",
+                 "YT_ARTIST_PO_TOKEN": "mytoken",
+             }, clear=False):
+            mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "chrome" in captured.out
+        assert "PO token is set" in captured.out
+
+    def test_doctor_warns_no_po_token(self, tmp_path, capfd):
+        """doctor should WARN when PO token is not set."""
+        db = tmp_path / "test.db"
+        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+             patch("subprocess.run") as mock_run, \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch.dict(os.environ, {}, clear=True):
+            mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "WARN" in captured.out
+        assert "PO token not set" in captured.out
+
+    def test_doctor_shows_summary(self, tmp_path, capfd):
+        """doctor should show a summary line at the end."""
+        db = tmp_path / "test.db"
+        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+             patch("subprocess.run") as mock_run, \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch.dict(os.environ, {}, clear=False):
+            mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "checks passed" in captured.out

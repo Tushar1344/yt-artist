@@ -343,6 +343,37 @@ class TestFirstRunDetection:
 # Hint output goes to stderr (not stdout)
 # ---------------------------------------------------------------------------
 
+class TestQuickstartAuth:
+
+    def test_quickstart_mentions_auth(self, tmp_path, capfd):
+        """quickstart should mention PO token / YouTube authentication."""
+        db = tmp_path / "test.db"
+        code = _run_cli("quickstart", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "YT_ARTIST_PO_TOKEN" in captured.out
+        assert "PO-Token" in captured.out or "PO token" in captured.out
+
+    def test_quickstart_mentions_doctor(self, tmp_path, capfd):
+        """quickstart should mention yt-artist doctor."""
+        db = tmp_path / "test.db"
+        code = _run_cli("quickstart", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "doctor" in captured.out
+
+
+class TestFirstRunMentionsDoctor:
+
+    def test_first_run_mentions_doctor(self, tmp_path, capfd):
+        """On first use with empty DB, stderr should mention doctor."""
+        db = tmp_path / "test.db"
+        code = _run_cli("list-prompts", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "doctor" in captured.err
+
+
 class TestHintOutputChannel:
 
     def test_hints_go_to_stderr_not_stdout(self, tmp_path, capfd):

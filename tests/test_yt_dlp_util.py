@@ -9,6 +9,7 @@ from yt_artist.yt_dlp_util import (
     MAX_CONCURRENCY,
     DEFAULT_INTER_VIDEO_DELAY,
     get_inter_video_delay,
+    get_auth_config,
 )
 
 # Default sleep flags that yt_dlp_cmd always appends.
@@ -117,3 +118,63 @@ def test_inter_video_delay_negative_clamped():
     """Negative env value is clamped to 0."""
     with patch.dict(os.environ, {"YT_ARTIST_INTER_VIDEO_DELAY": "-3"}, clear=True):
         assert get_inter_video_delay() == 0.0
+
+
+# --- PO token tests ---
+
+def test_po_token_appended():
+    """YT_ARTIST_PO_TOKEN adds --extractor-args with po_token."""
+    _resolve_base.cache_clear()
+    with patch("yt_artist.yt_dlp_util.shutil.which", return_value="/usr/bin/yt-dlp"), \
+         patch.dict(os.environ, {"YT_ARTIST_PO_TOKEN": "abc123"}, clear=True):
+        result = yt_dlp_cmd()
+    assert result == ["yt-dlp"] + _SLEEP + ["--extractor-args", "youtube:po_token=abc123"]
+
+
+def test_po_token_combined_with_cookies():
+    """PO token and cookies can be used together."""
+    _resolve_base.cache_clear()
+    with patch("yt_artist.yt_dlp_util.shutil.which", return_value="/usr/bin/yt-dlp"), \
+         patch.dict(os.environ, {
+             "YT_ARTIST_COOKIES_BROWSER": "chrome",
+             "YT_ARTIST_PO_TOKEN": "tok123",
+         }, clear=True):
+        result = yt_dlp_cmd()
+    assert result == [
+        "yt-dlp"] + _SLEEP + [
+        "--cookies-from-browser", "chrome",
+        "--extractor-args", "youtube:po_token=tok123",
+    ]
+
+
+def test_po_token_empty_ignored():
+    """Empty or whitespace PO token is ignored."""
+    _resolve_base.cache_clear()
+    with patch("yt_artist.yt_dlp_util.shutil.which", return_value="/usr/bin/yt-dlp"), \
+         patch.dict(os.environ, {"YT_ARTIST_PO_TOKEN": "  "}, clear=True):
+        result = yt_dlp_cmd()
+    assert result == ["yt-dlp"] + _SLEEP
+
+
+# --- get_auth_config tests ---
+
+def test_get_auth_config_all_set():
+    """get_auth_config returns all configured values."""
+    with patch.dict(os.environ, {
+        "YT_ARTIST_COOKIES_BROWSER": "firefox",
+        "YT_ARTIST_COOKIES_FILE": "/tmp/cookies.txt",
+        "YT_ARTIST_PO_TOKEN": "mytoken",
+    }, clear=True):
+        cfg = get_auth_config()
+    assert cfg["cookies_browser"] == "firefox"
+    assert cfg["cookies_file"] == "/tmp/cookies.txt"
+    assert cfg["po_token"] is True
+
+
+def test_get_auth_config_empty():
+    """get_auth_config returns empty/false when nothing is set."""
+    with patch.dict(os.environ, {}, clear=True):
+        cfg = get_auth_config()
+    assert cfg["cookies_browser"] == ""
+    assert cfg["cookies_file"] == ""
+    assert cfg["po_token"] is False

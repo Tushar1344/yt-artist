@@ -23,7 +23,7 @@ from yt_artist.llm import check_connectivity as _check_llm
 from yt_artist.storage import Storage
 from yt_artist.summarizer import summarize
 from yt_artist.transcriber import transcribe, extract_video_id
-from yt_artist.yt_dlp_util import channel_url_for, MAX_CONCURRENCY, get_inter_video_delay
+from yt_artist.yt_dlp_util import channel_url_for, MAX_CONCURRENCY, get_inter_video_delay, get_auth_config
 
 log = logging.getLogger("yt_artist.cli")
 
@@ -294,6 +294,13 @@ def main() -> None:
     p_jobs_clean = p_jobs_sub.add_parser("clean", help="Remove finished jobs older than 7 days")
     p_jobs_clean.set_defaults(func=_cmd_jobs, jobs_action="clean")
 
+    # doctor: pre-flight checks for setup
+    p_doctor = subparsers.add_parser(
+        "doctor",
+        help="Check your setup: yt-dlp, YouTube auth, PO token, LLM endpoint",
+    )
+    p_doctor.set_defaults(func=_cmd_doctor)
+
     args = parser.parse_args()
 
     # Configure logging: default INFO; YT_ARTIST_LOG_LEVEL overrides (e.g. DEBUG, WARNING).
@@ -348,10 +355,14 @@ def main() -> None:
 
         _signal.signal(_signal.SIGTERM, _bg_sigterm_handler)
 
-    # First-run hint: suggest quickstart if DB is empty.
-    if not _quiet and args.command not in ("quickstart", "jobs"):
+    # First-run hint: suggest doctor + quickstart if DB is empty.
+    if not _quiet and args.command not in ("quickstart", "doctor", "jobs"):
         if not storage.list_artists():
-            sys.stderr.write("\n  \U0001f4a1 First time? Run `yt-artist quickstart` for a guided tour.\n\n")
+            sys.stderr.write(
+                "\n  \U0001f4a1 First time? Check your setup and get started:\n"
+                "     yt-artist doctor      — verify yt-dlp, auth, and LLM\n"
+                "     yt-artist quickstart  — guided 3-step walkthrough\n\n"
+            )
 
     try:
         args.func(args, storage, data_dir)
@@ -780,6 +791,21 @@ def _cmd_quickstart(args: argparse.Namespace, storage: Storage, data_dir: Path) 
     print("A built-in 'default' prompt is ready to use \u2014 no setup needed.")
     print()
     print("-" * w)
+    print("PREREQUISITE: Check your setup")
+    print("-" * w)
+    print()
+    print(f"  yt-artist{db_flag} doctor")
+    print()
+    print("  This checks yt-dlp, YouTube authentication, and LLM connectivity.")
+    print("  YouTube now requires a PO token for many subtitle downloads.")
+    print("  If doctor reports warnings, set these before transcribing:")
+    print()
+    print("  export YT_ARTIST_COOKIES_BROWSER=chrome   # or firefox/safari")
+    print("  export YT_ARTIST_PO_TOKEN=<your-token>")
+    print()
+    print("  PO token guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token")
+    print()
+    print("-" * w)
     print("STEP 1: Fetch the channel's video list")
     print("-" * w)
     print()
@@ -818,6 +844,131 @@ def _cmd_quickstart(args: argparse.Namespace, storage: Storage, data_dir: Path) 
     print("=" * w)
     print("  Copy any command above and paste it in your terminal to start!")
     print("=" * w)
+
+
+def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
+    """Pre-flight checks: yt-dlp, YouTube auth, PO token, LLM, test subtitle fetch."""
+    import shutil
+    import subprocess
+
+    ok_count = 0
+    warn_count = 0
+    fail_count = 0
+
+    def _ok(msg: str) -> None:
+        nonlocal ok_count
+        ok_count += 1
+        print(f"  \u2705 OK   {msg}")
+
+    def _warn(msg: str) -> None:
+        nonlocal warn_count
+        warn_count += 1
+        print(f"  \u26a0\ufe0f  WARN {msg}")
+
+    def _fail(msg: str) -> None:
+        nonlocal fail_count
+        fail_count += 1
+        print(f"  \u274c FAIL {msg}")
+
+    print("yt-artist doctor")
+    print("=" * 50)
+    print()
+
+    # --- [1/5] yt-dlp installation ---
+    print("[1/5] yt-dlp installation")
+    yt_dlp_path = shutil.which("yt-dlp")
+    if yt_dlp_path:
+        try:
+            ver = subprocess.run(
+                ["yt-dlp", "--version"], capture_output=True, text=True, timeout=10,
+            )
+            version_str = (ver.stdout or "").strip()
+            _ok(f"yt-dlp found: {yt_dlp_path} (version {version_str})")
+        except Exception:
+            _ok(f"yt-dlp found: {yt_dlp_path} (could not get version)")
+    else:
+        _fail("yt-dlp not found on PATH. Install: pip install yt-dlp")
+    print()
+
+    # --- [2/5] YouTube authentication (cookies) ---
+    print("[2/5] YouTube authentication")
+    auth = get_auth_config()
+    if auth["cookies_browser"]:
+        _ok(f"Cookies: using browser '{auth['cookies_browser']}'")
+    elif auth["cookies_file"]:
+        _ok(f"Cookies: using file '{auth['cookies_file']}'")
+    else:
+        _warn(
+            "No cookies configured. Some videos (age-restricted, members-only) may fail.\n"
+            "         Set YT_ARTIST_COOKIES_BROWSER=chrome  (or firefox/safari)"
+        )
+    print()
+
+    # --- [3/5] PO token ---
+    print("[3/5] PO token (proof of origin)")
+    if auth["po_token"]:
+        _ok("PO token is set (YT_ARTIST_PO_TOKEN)")
+    else:
+        _warn(
+            "PO token not set. YouTube may block subtitle downloads.\n"
+            "         Set YT_ARTIST_PO_TOKEN=<your-token>\n"
+            "         Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token"
+        )
+    print()
+
+    # --- [4/5] LLM endpoint ---
+    print("[4/5] LLM endpoint (for summarize)")
+    from yt_artist.llm import get_config_summary, check_connectivity
+    llm = get_config_summary()
+    provider = "Ollama (local)" if llm["is_ollama"] else "OpenAI-compatible API"
+    print(f"       Provider: {provider}")
+    print(f"       Endpoint: {llm['base_url']}")
+    print(f"       Model:    {llm['model']}")
+    try:
+        check_connectivity()
+        _ok(f"LLM endpoint reachable ({llm['base_url']})")
+    except RuntimeError as e:
+        _fail(f"LLM endpoint unreachable. {e}")
+    print()
+
+    # --- [5/5] Test subtitle fetch ---
+    print("[5/5] Test subtitle fetch (quick metadata check)")
+    if yt_dlp_path:
+        test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # "Me at the zoo" — first YT video
+        try:
+            from yt_artist.yt_dlp_util import yt_dlp_cmd
+            cmd = yt_dlp_cmd() + ["--skip-download", "--no-warnings", "-j", test_url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                _ok("yt-dlp can reach YouTube and fetch video metadata")
+            else:
+                stderr = (result.stderr or "").strip()
+                from yt_artist.transcriber import _classify_yt_dlp_error
+                err_type, err_msg = _classify_yt_dlp_error(stderr)
+                if err_type != "generic":
+                    _fail(f"YouTube access issue: {err_msg}")
+                else:
+                    _fail(f"yt-dlp metadata fetch failed (exit {result.returncode}): {stderr[:200]}")
+        except subprocess.TimeoutExpired:
+            _warn("yt-dlp metadata fetch timed out (30s). Network may be slow.")
+        except Exception as e:
+            _fail(f"yt-dlp test failed: {e}")
+    else:
+        _warn("Skipped (yt-dlp not installed)")
+    print()
+
+    # --- Summary ---
+    print("=" * 50)
+    total = ok_count + warn_count + fail_count
+    print(f"  {ok_count}/{total} checks passed", end="")
+    if warn_count:
+        print(f", {warn_count} warning(s)", end="")
+    if fail_count:
+        print(f", {fail_count} failure(s)", end="")
+    print()
+    if fail_count or warn_count:
+        print()
+        print("  Fix warnings/failures above, then re-run: yt-artist doctor")
 
 
 def _cmd_jobs(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:

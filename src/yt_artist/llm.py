@@ -66,6 +66,21 @@ def check_connectivity() -> None:
         )
 
 
+def get_config_summary() -> dict:
+    """Return current LLM configuration for diagnostics (used by ``yt-artist doctor``).
+
+    Returns a dict with keys: base_url, api_key_set (bool), model, is_ollama (bool).
+    """
+    base_url, api_key, default_model = _resolve_config()
+    model = os.environ.get("OPENAI_MODEL") or default_model
+    return {
+        "base_url": base_url,
+        "api_key_set": bool(api_key and api_key != "ollama"),
+        "model": model,
+        "is_ollama": _is_ollama(base_url),
+    }
+
+
 _cached_client: Optional[Any] = None
 _cached_client_key: Optional[Tuple[str, str]] = None
 

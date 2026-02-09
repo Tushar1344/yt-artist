@@ -120,6 +120,7 @@ export DB=./yt.db
 | `jobs stop <job_id>` | Send SIGTERM to stop a running background job. |
 | `jobs clean` | Remove finished jobs older than 7 days and their log files. |
 | `quickstart` | Print a guided 3-step walkthrough using @TED as an example. |
+| `doctor` | Check your setup: yt-dlp installation, YouTube authentication, PO token, LLM endpoint, test metadata fetch. |
 
 **Global options:** `--db PATH`, `--data-dir PATH`, `--bg` (run in background), `-q`/`--quiet` (suppress hints)
 
@@ -154,9 +155,24 @@ export DB=./yt.db
 - **Force local Ollama when you have an API key:** Set `OPENAI_BASE_URL=http://localhost:11434/v1` for that run.
 - **OpenAI (or other API):** Set `OPENAI_API_KEY`; optionally `OPENAI_BASE_URL`, `OPENAI_MODEL`.
 
-## Environment (YouTube cookies)
+## Environment (YouTube authentication)
 
-Some videos (age-restricted, member-only) require authentication cookies for `yt-dlp` to fetch subtitles. Set **one** of these:
+YouTube increasingly requires authentication for subtitle downloads. Run `yt-artist doctor` to check your setup.
+
+### PO Token (proof of origin) — recommended
+
+YouTube uses PO tokens to verify requests come from a real browser. Without one, subtitle downloads may silently fail.
+
+- **`YT_ARTIST_PO_TOKEN`** — Your proof-of-origin token. Get one by following the [yt-dlp PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token).
+
+```bash
+export YT_ARTIST_PO_TOKEN=<your-token>
+yt-artist doctor   # verify it's detected
+```
+
+### Cookies (for restricted content)
+
+Some videos (age-restricted, member-only) also require authentication cookies. Set **one** of these:
 
 - **`YT_ARTIST_COOKIES_BROWSER`** — Browser name to extract cookies from (e.g. `chrome`, `firefox`, `safari`). Uses `yt-dlp --cookies-from-browser`.
 - **`YT_ARTIST_COOKIES_FILE`** — Path to a Netscape-format cookies file. Uses `yt-dlp --cookies`.
@@ -167,7 +183,9 @@ export YT_ARTIST_COOKIES_BROWSER=chrome
 yt-artist transcribe --artist-id @channel
 ```
 
-If neither is set, `yt-dlp` runs without cookies (works for most public videos with subtitles).
+Cookies and PO token can be used together (they serve different purposes: cookies = session auth, PO token = proof of origin for bot detection).
+
+If neither is set, `yt-dlp` runs without authentication (may fail on many videos).
 
 ## Environment (rate limits & performance)
 
@@ -186,7 +204,10 @@ If neither is set, `yt-dlp` runs without cookies (works for most public videos w
 | Summarize says “Set a default prompt or pass --prompt” | Run `yt-artist set-default-prompt --artist-id @X --prompt short` or pass `--prompt short` to summarize. |
 | Summarize fails (401 / connection) | For Ollama: start it and run `ollama run mistral`. To force Ollama when an API key is set: `OPENAI_BASE_URL=http://localhost:11434/v1 yt-artist ... summarize ...` |
 | build-artist-prompt returns generic “about” | Install `duckduckgo-search` for web search: `pip install yt-artist[search]`. |
-| No transcript / transcribe fails | Video may have no subtitles, or yt-dlp may be blocked; try another video or network. Set `YT_ARTIST_COOKIES_BROWSER=chrome` if the video requires login (age-restricted, member-only). |
+| No transcript / transcribe fails | Run `yt-artist doctor` to check your setup. Most likely you need a PO token: `export YT_ARTIST_PO_TOKEN=<token>`. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token). |
+| "Sign in to confirm your age" | Video is age-restricted. Set `YT_ARTIST_COOKIES_BROWSER=chrome` and ensure you're logged into YouTube in that browser. |
+| "403 Forbidden" or "confirm you're not a bot" | YouTube is blocking automated access. Set `YT_ARTIST_PO_TOKEN` and optionally `YT_ARTIST_COOKIES_BROWSER`. Run `yt-artist doctor` to verify. |
+| "Check your setup" | Run `yt-artist doctor` to see which components need configuration. |
 | Background job shows "failed" | The process died (OOM, crash). Check the log with `yt-artist jobs attach <id>`. Stale jobs are auto-detected when you run `yt-artist jobs`. |
 | Too many hints in output | Use `--quiet` or `-q` to suppress all hints and tips. |
 | Want to start fresh? | Run `yt-artist quickstart` for a guided walkthrough. |

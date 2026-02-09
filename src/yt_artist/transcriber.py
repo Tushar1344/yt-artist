@@ -116,6 +116,71 @@ def _is_rate_limited(stderr: str) -> bool:
     return "429" in lower or "too many requests" in lower or "rate limit" in lower
 
 
+# --- Patterns for classifying yt-dlp authentication / bot-detection errors ---
+_AGE_PATTERNS = [
+    "age-restricted",
+    "age restricted",
+    "sign in to confirm your age",
+    "age gate",
+    "age verification",
+]
+_AUTH_PATTERNS = [
+    "sign in to confirm",
+    "login required",
+    "account required",
+    "this video requires payment",
+    "join this channel",
+    "members only",
+    "private video",
+]
+_BOT_PATTERNS = [
+    "confirm you're not a bot",
+    "unusual traffic",
+    "automated",
+    "captcha",
+    "forbidden",
+    "403",
+]
+
+_AUTH_GUIDANCE = (
+    "  Set YT_ARTIST_COOKIES_BROWSER=chrome  (or firefox/safari)\n"
+    "  Set YT_ARTIST_PO_TOKEN=<your-token>   (proof of origin)\n"
+    "  PO token guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token\n"
+    "  Run `yt-artist doctor` to check your configuration."
+)
+
+
+def _classify_yt_dlp_error(stderr: str) -> Tuple[str, str]:
+    """Classify a yt-dlp error and return (error_type, user_message).
+
+    error_type is one of: 'rate_limit', 'age_restricted', 'auth_required',
+    'bot_detected', or 'generic'.  For non-generic types the user_message
+    contains actionable guidance (PO token, cookies, doctor command).
+    """
+    lower = stderr.lower()
+
+    if _is_rate_limited(stderr):
+        return ("rate_limit", "YouTube rate-limited this request (HTTP 429).")
+
+    for p in _AGE_PATTERNS:
+        if p in lower:
+            return ("age_restricted",
+                    f"This video is age-restricted. YouTube requires authentication.\n{_AUTH_GUIDANCE}")
+
+    for p in _AUTH_PATTERNS:
+        if p in lower:
+            return ("auth_required",
+                    f"YouTube requires authentication for this content.\n{_AUTH_GUIDANCE}")
+
+    for p in _BOT_PATTERNS:
+        if p in lower:
+            return ("bot_detected",
+                    f"YouTube detected automated access and is blocking requests.\n"
+                    f"This usually means you need a PO (proof of origin) token.\n{_AUTH_GUIDANCE}")
+
+    return ("generic", "")
+
+
 def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
     """
     Run yt-dlp --write-auto-sub --write-sub --skip-download; return (raw_text, format).
@@ -160,6 +225,12 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
                     f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
                     "Try again later or reduce --concurrency."
                 )
+        # Check for auth/bot errors before wasting retries.
+        err_type, err_msg = _classify_yt_dlp_error(last_stderr)
+        if err_type not in ("rate_limit", "generic"):
+            raise FileNotFoundError(
+                f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}"
+            )
         found = _find_subtitle_file(out_dir)
         if found:
             log.debug("Optimistic English subtitle download succeeded for %s", video_url)
@@ -214,7 +285,15 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
                 f"yt-dlp failed (exit {result.returncode}). {err}"
             ) if err else result.check_returncode()
 
-    yt_out = (last_stdout + last_stderr).strip()
+    # Classify the error — give specific guidance for auth/bot issues.
+    combined_stderr = (last_stdout + last_stderr).strip()
+    err_type, err_msg = _classify_yt_dlp_error(combined_stderr)
+    if err_type not in ("rate_limit", "generic"):
+        raise FileNotFoundError(
+            f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}"
+        )
+
+    yt_out = combined_stderr
     hint = f" yt-dlp: {yt_out[:400]}" if yt_out else ""
     langs_hint = f" Detected subtitle languages: {', '.join(json_langs[:10])}" if json_langs else ""
     msg = (

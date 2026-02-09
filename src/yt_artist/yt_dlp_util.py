@@ -41,7 +41,7 @@ def get_inter_video_delay() -> float:
 
 
 def yt_dlp_cmd() -> List[str]:
-    """Return base yt-dlp command with rate-limit sleep flags and optional cookie args.
+    """Return base yt-dlp command with rate-limit sleep flags, optional cookies, and PO token.
 
     Rate-limit flags (always appended):
       --sleep-requests 1    – 1s pause between HTTP requests within a single yt-dlp run
@@ -50,6 +50,13 @@ def yt_dlp_cmd() -> List[str]:
     Cookie env vars (checked in order):
       YT_ARTIST_COOKIES_BROWSER  – browser name for --cookies-from-browser (e.g. "chrome")
       YT_ARTIST_COOKIES_FILE     – path to a Netscape cookies.txt for --cookies
+
+    PO token env var:
+      YT_ARTIST_PO_TOKEN  – proof-of-origin token for YouTube bot detection bypass.
+                            See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token
+
+    Cookies and PO token can be used together (they serve different purposes:
+    cookies = session auth, PO token = proof of origin for bot detection).
 
     ⚠️  Cookie warning: using cookies ties automated activity to your Google
     account.  YouTube can (and does) suspend accounts used with automated tools.
@@ -66,13 +73,27 @@ def yt_dlp_cmd() -> List[str]:
     # --- Cookie flags ---
     cookies_browser = (os.environ.get("YT_ARTIST_COOKIES_BROWSER") or "").strip()
     if cookies_browser:
-        return base + ["--cookies-from-browser", cookies_browser]
+        base += ["--cookies-from-browser", cookies_browser]
+    else:
+        cookies_file = (os.environ.get("YT_ARTIST_COOKIES_FILE") or "").strip()
+        if cookies_file:
+            base += ["--cookies", cookies_file]
 
-    cookies_file = (os.environ.get("YT_ARTIST_COOKIES_FILE") or "").strip()
-    if cookies_file:
-        return base + ["--cookies", cookies_file]
+    # --- PO token (proof of origin for YouTube bot detection) ---
+    po_token = (os.environ.get("YT_ARTIST_PO_TOKEN") or "").strip()
+    if po_token:
+        base += ["--extractor-args", f"youtube:po_token={po_token}"]
 
     return base
+
+
+def get_auth_config() -> dict:
+    """Return current YouTube authentication configuration for diagnostics."""
+    return {
+        "cookies_browser": (os.environ.get("YT_ARTIST_COOKIES_BROWSER") or "").strip(),
+        "cookies_file": (os.environ.get("YT_ARTIST_COOKIES_FILE") or "").strip(),
+        "po_token": bool((os.environ.get("YT_ARTIST_PO_TOKEN") or "").strip()),
+    }
 
 
 def channel_url_for(artist_id: str) -> str:

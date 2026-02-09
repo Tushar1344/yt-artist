@@ -8,6 +8,7 @@ from yt_artist import storage
 from yt_artist.transcriber import (
     extract_video_id,
     _subs_to_plain_text,
+    _classify_yt_dlp_error,
     transcribe,
 )
 
@@ -111,3 +112,61 @@ def test_transcribe_writes_optional_file(store, tmp_path):
     transcript_file = tmp_path / "artists" / "UC_a" / "transcripts" / "vid2test02.txt"
     assert transcript_file.exists()
     assert "Optional file text" in transcript_file.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# _classify_yt_dlp_error tests
+# ---------------------------------------------------------------------------
+
+class TestClassifyYtDlpError:
+
+    def test_rate_limit_detected(self):
+        """HTTP 429 / rate limit is classified correctly."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: HTTP Error 429: Too Many Requests")
+        assert err_type == "rate_limit"
+        assert "429" in msg
+
+    def test_age_restricted_detected(self):
+        """Age-restricted error is classified with auth guidance."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: Sign in to confirm your age")
+        assert err_type == "age_restricted"
+        assert "YT_ARTIST_PO_TOKEN" in msg
+        assert "doctor" in msg
+
+    def test_auth_required_detected(self):
+        """Login required error is classified."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: This video requires login required")
+        assert err_type == "auth_required"
+        assert "authentication" in msg.lower()
+
+    def test_members_only_detected(self):
+        """Members-only content detected as auth_required."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: Join this channel to get access to members only content")
+        assert err_type == "auth_required"
+
+    def test_bot_detected_403(self):
+        """403 Forbidden classified as bot_detected."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: HTTP Error 403: Forbidden")
+        assert err_type == "bot_detected"
+        assert "PO" in msg or "po_token" in msg.lower() or "proof of origin" in msg.lower()
+
+    def test_bot_detected_captcha(self):
+        """CAPTCHA / bot detection classified."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: confirm you're not a bot")
+        assert err_type == "bot_detected"
+
+    def test_generic_unknown_error(self):
+        """Unknown errors return generic type with empty message."""
+        err_type, msg = _classify_yt_dlp_error("ERROR: Something completely unrelated went wrong")
+        assert err_type == "generic"
+        assert msg == ""
+
+    def test_messages_mention_doctor(self):
+        """All non-generic messages mention yt-artist doctor."""
+        for stderr in [
+            "Sign in to confirm your age",
+            "login required",
+            "confirm you're not a bot",
+        ]:
+            _, msg = _classify_yt_dlp_error(stderr)
+            assert "doctor" in msg, f"Message for '{stderr}' should mention doctor"

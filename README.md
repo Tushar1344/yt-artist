@@ -87,6 +87,9 @@ yt-artist build-artist-prompt --artist-id @channel --save-as-default
 yt-artist list-prompts
 yt-artist search-transcripts [--artist-id ID] [--video-id ID]
 
+# Check your setup (yt-dlp, auth, LLM):
+yt-artist doctor
+
 # First time? Get a guided walkthrough:
 yt-artist quickstart
 ```
@@ -96,6 +99,11 @@ yt-artist quickstart
 - **DB path:** `--db path/to/yt_artist.db` (default: `<data-dir>/data/yt_artist.db`)
 - **Data dir:** `--data-dir path` (default: current working directory)
 - **Per-artist default prompt:** Set with `set-default-prompt`; fallback: env `YT_ARTIST_DEFAULT_PROMPT` or first prompt in DB.
+- **YouTube authentication (for transcription):** YouTube may require authentication for subtitle downloads.
+  - `YT_ARTIST_PO_TOKEN` — Proof-of-origin token for YouTube bot detection bypass. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token).
+  - `YT_ARTIST_COOKIES_BROWSER` — Browser name for `yt-dlp --cookies-from-browser` (e.g. `chrome`, `firefox`, `safari`). Required for age-restricted or members-only videos.
+  - `YT_ARTIST_COOKIES_FILE` — Path to a Netscape-format cookies file (alternative to browser cookies).
+  - Run `yt-artist doctor` to check your authentication setup.
 - **LLM (for summarize):** Uses **local Ollama by default** when `OPENAI_API_KEY` is not set.
   - `OPENAI_BASE_URL` — API base URL (default: `http://localhost:11434/v1` for Ollama; or `https://api.openai.com/v1` when API key is set)
   - `OPENAI_API_KEY` — If set, use OpenAI (or another provider); if unset, use Ollama with key `ollama`
