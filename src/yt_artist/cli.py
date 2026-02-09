@@ -797,13 +797,17 @@ def _cmd_quickstart(args: argparse.Namespace, storage: Storage, data_dir: Path) 
     print(f"  yt-artist{db_flag} doctor")
     print()
     print("  This checks yt-dlp, YouTube authentication, and LLM connectivity.")
-    print("  YouTube now requires a PO token for many subtitle downloads.")
-    print("  If doctor reports warnings, set these before transcribing:")
     print()
-    print("  export YT_ARTIST_COOKIES_BROWSER=chrome   # or firefox/safari")
-    print("  export YT_ARTIST_PO_TOKEN=<your-token>")
+    print("  YouTube requires a PO token for subtitle downloads.")
+    print("  yt-artist auto-installs a PO token provider (rustypipe) so")
+    print("  tokens are generated automatically — no manual setup needed.")
     print()
-    print("  PO token guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token")
+    print("  If doctor reports a PO token warning, install the provider:")
+    print("    pip install yt-dlp-get-pot-rustypipe")
+    print()
+    print("  Or set a manual token as fallback:")
+    print("    export YT_ARTIST_PO_TOKEN=web.subs+<token>")
+    print("  Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide")
     print()
     print("-" * w)
     print("STEP 1: Fetch the channel's video list")
@@ -906,13 +910,24 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
 
     # --- [3/5] PO token ---
     print("[3/5] PO token (proof of origin)")
+    has_provider = False
+    try:
+        from importlib.metadata import distribution
+        distribution("yt-dlp-get-pot-rustypipe")
+        has_provider = True
+    except Exception:
+        pass
     if auth["po_token"]:
-        _ok("PO token is set (YT_ARTIST_PO_TOKEN)")
+        extra = " (auto-provider also installed)" if has_provider else ""
+        _ok(f"PO token is set via YT_ARTIST_PO_TOKEN{extra}")
+    elif has_provider:
+        _ok("PO token provider installed (yt-dlp-get-pot-rustypipe) — tokens generated automatically")
     else:
         _warn(
-            "PO token not set. YouTube may block subtitle downloads.\n"
-            "         Set YT_ARTIST_PO_TOKEN=<your-token>\n"
-            "         Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token"
+            "No PO token and no auto-provider installed. Transcribe will likely fail.\n"
+            "         Fix: pip install yt-dlp-get-pot-rustypipe   (recommended, automatic)\n"
+            "         Or:  export YT_ARTIST_PO_TOKEN=web.subs+<token>   (manual)\n"
+            "         Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide"
         )
     print()
 

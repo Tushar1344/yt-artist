@@ -1,4 +1,5 @@
 """Tests for transcriber: mock yt-dlp subtitle output; assert DB transcript."""
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from yt_artist.transcriber import (
     extract_video_id,
     _subs_to_plain_text,
     _classify_yt_dlp_error,
+    _run_yt_dlp_subtitles,
     transcribe,
 )
 
@@ -170,3 +172,49 @@ class TestClassifyYtDlpError:
         ]:
             _, msg = _classify_yt_dlp_error(stderr)
             assert "doctor" in msg, f"Message for '{stderr}' should mention doctor"
+
+
+# ---------------------------------------------------------------------------
+# _run_yt_dlp_subtitles provider-aware error message tests
+# ---------------------------------------------------------------------------
+
+class TestRunYtDlpSubtitlesProviderHints:
+    """Test that no-subtitle errors include provider-aware hints."""
+
+    def test_error_hints_install_provider_when_missing(self, tmp_path):
+        """When no provider and no manual token, error should suggest installing rustypipe."""
+        from importlib.metadata import PackageNotFoundError
+        original_distribution = __import__("importlib.metadata", fromlist=["distribution"]).distribution
+
+        def _mock_distribution(name):
+            if name == "yt-dlp-get-pot-rustypipe":
+                raise PackageNotFoundError(name)
+            return original_distribution(name)
+
+        # Mock subprocess.run to simulate yt-dlp returning no subtitles (exit 0, no files)
+        mock_result = type("Result", (), {
+            "returncode": 0, "stdout": "", "stderr": "",
+            "check_returncode": lambda self: None,
+        })()
+
+        with patch("subprocess.run", return_value=mock_result), \
+             patch("yt_artist.transcriber._get_available_sub_langs", return_value=[]), \
+             patch("importlib.metadata.distribution", side_effect=_mock_distribution), \
+             patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(FileNotFoundError, match="pip install yt-dlp-get-pot-rustypipe"):
+                _run_yt_dlp_subtitles("https://www.youtube.com/watch?v=test12345", tmp_path / "subs")
+
+    def test_error_hints_provider_installed_but_failed(self, tmp_path):
+        """When provider IS installed but subtitles still fail, error should note that."""
+        # Mock subprocess.run to simulate yt-dlp returning no subtitles (exit 0, no files)
+        mock_result = type("Result", (), {
+            "returncode": 0, "stdout": "", "stderr": "",
+            "check_returncode": lambda self: None,
+        })()
+
+        with patch("subprocess.run", return_value=mock_result), \
+             patch("yt_artist.transcriber._get_available_sub_langs", return_value=[]), \
+             patch.dict(os.environ, {}, clear=True):
+            # yt-dlp-get-pot-rustypipe is a real dependency, so it IS importable
+            with pytest.raises(FileNotFoundError, match="provider.*installed but subtitles still failed"):
+                _run_yt_dlp_subtitles("https://www.youtube.com/watch?v=test12345", tmp_path / "subs")

@@ -53,7 +53,7 @@ def yt_dlp_cmd() -> List[str]:
 
     PO token env var:
       YT_ARTIST_PO_TOKEN  – proof-of-origin token for YouTube bot detection bypass.
-                            See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token
+                            See https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
 
     Cookies and PO token can be used together (they serve different purposes:
     cookies = session auth, PO token = proof of origin for bot detection).

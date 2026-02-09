@@ -50,6 +50,7 @@ For AI summaries, install [Ollama](https://ollama.com) and pull a model: `ollama
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+pip install --upgrade pip setuptools wheel   # requires pip >= 22 for editable pyproject.toml installs
 pip install -e ".[dev]"
 ```
 
@@ -99,9 +100,9 @@ yt-artist quickstart
 - **DB path:** `--db path/to/yt_artist.db` (default: `<data-dir>/data/yt_artist.db`)
 - **Data dir:** `--data-dir path` (default: current working directory)
 - **Per-artist default prompt:** Set with `set-default-prompt`; fallback: env `YT_ARTIST_DEFAULT_PROMPT` or first prompt in DB.
-- **YouTube authentication (for transcription):** YouTube may require authentication for subtitle downloads.
-  - `YT_ARTIST_PO_TOKEN` — Proof-of-origin token for YouTube bot detection bypass. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token).
-  - `YT_ARTIST_COOKIES_BROWSER` — Browser name for `yt-dlp --cookies-from-browser` (e.g. `chrome`, `firefox`, `safari`). Required for age-restricted or members-only videos.
+- **YouTube authentication (for transcription):** A PO token provider (`yt-dlp-get-pot-rustypipe`) is auto-installed to handle YouTube's bot detection automatically — no manual token setup needed.
+  - `YT_ARTIST_PO_TOKEN` — Manual fallback: proof-of-origin token. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide).
+  - `YT_ARTIST_COOKIES_BROWSER` — Browser name for `yt-dlp --cookies-from-browser` (e.g. `chrome`, `firefox`, `safari`). Only needed for age-restricted or members-only videos.
   - `YT_ARTIST_COOKIES_FILE` — Path to a Netscape-format cookies file (alternative to browser cookies).
   - Run `yt-artist doctor` to check your authentication setup.
 - **LLM (for summarize):** Uses **local Ollama by default** when `OPENAI_API_KEY` is not set.

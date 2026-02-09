@@ -11,6 +11,7 @@ requires-python = ">=3.9"
 dependencies = [
     "yt-dlp>=2024.1.1",
     "openai>=1.0.0",
+    "yt-dlp-get-pot-rustypipe",
 ]
 
 [project.optional-dependencies]

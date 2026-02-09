@@ -159,14 +159,25 @@ export DB=./yt.db
 
 YouTube increasingly requires authentication for subtitle downloads. Run `yt-artist doctor` to check your setup.
 
-### PO Token (proof of origin) — recommended
+### PO Token (proof of origin) — automatic
 
-YouTube uses PO tokens to verify requests come from a real browser. Without one, subtitle downloads may silently fail.
+YouTube uses PO tokens to verify requests come from a real browser. Without one, subtitle downloads will fail.
 
-- **`YT_ARTIST_PO_TOKEN`** — Your proof-of-origin token. Get one by following the [yt-dlp PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token).
+**yt-artist auto-installs a PO token provider** ([yt-dlp-get-pot-rustypipe](https://pypi.org/project/yt-dlp-get-pot-rustypipe/)) that generates tokens automatically at runtime. No manual token setup is needed.
+
+Run `yt-artist doctor` to confirm the provider is detected. If it's missing:
+```bash
+pip install yt-dlp-get-pot-rustypipe
+```
+
+### Manual PO token (fallback)
+
+If the auto-provider doesn't work for your setup, you can set a manual token via **`YT_ARTIST_PO_TOKEN`**. Get one by following the [yt-dlp PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide).
+
+For **subtitle downloads**, the token value is typically in the format `web.subs+<token>`. To get it: open YouTube in your browser → DevTools (F12) → Network tab → filter for `v1/player` → request payload under `serviceIntegrityDimensions.poToken`.
 
 ```bash
-export YT_ARTIST_PO_TOKEN=<your-token>
+export YT_ARTIST_PO_TOKEN=web.subs+<token_from_browser>
 yt-artist doctor   # verify it's detected
 ```
 
@@ -185,7 +196,7 @@ yt-artist transcribe --artist-id @channel
 
 Cookies and PO token can be used together (they serve different purposes: cookies = session auth, PO token = proof of origin for bot detection).
 
-If neither is set, `yt-dlp` runs without authentication (may fail on many videos).
+With the auto-provider installed (default), cookies are optional and only needed for restricted content.
 
 ## Environment (rate limits & performance)
 
@@ -204,9 +215,9 @@ If neither is set, `yt-dlp` runs without authentication (may fail on many videos
 | Summarize says “Set a default prompt or pass --prompt” | Run `yt-artist set-default-prompt --artist-id @X --prompt short` or pass `--prompt short` to summarize. |
 | Summarize fails (401 / connection) | For Ollama: start it and run `ollama run mistral`. To force Ollama when an API key is set: `OPENAI_BASE_URL=http://localhost:11434/v1 yt-artist ... summarize ...` |
 | build-artist-prompt returns generic “about” | Install `duckduckgo-search` for web search: `pip install yt-artist[search]`. |
-| No transcript / transcribe fails | Run `yt-artist doctor` to check your setup. Most likely you need a PO token: `export YT_ARTIST_PO_TOKEN=<token>`. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token). |
+| No transcript / transcribe fails | Run `yt-artist doctor`. If the PO token provider is missing: `pip install yt-dlp-get-pot-rustypipe`. Or set a manual token: `export YT_ARTIST_PO_TOKEN=web.subs+<token>`. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). |
 | "Sign in to confirm your age" | Video is age-restricted. Set `YT_ARTIST_COOKIES_BROWSER=chrome` and ensure you're logged into YouTube in that browser. |
-| "403 Forbidden" or "confirm you're not a bot" | YouTube is blocking automated access. Set `YT_ARTIST_PO_TOKEN` and optionally `YT_ARTIST_COOKIES_BROWSER`. Run `yt-artist doctor` to verify. |
+| "403 Forbidden" or "confirm you're not a bot" | YouTube is blocking automated access. Ensure the PO token provider is installed (`pip install yt-dlp-get-pot-rustypipe`) or set `YT_ARTIST_PO_TOKEN`. Run `yt-artist doctor` to verify. |
 | "Check your setup" | Run `yt-artist doctor` to see which components need configuration. |
 | Background job shows "failed" | The process died (OOM, crash). Check the log with `yt-artist jobs attach <id>`. Stale jobs are auto-detected when you run `yt-artist jobs`. |
 | Too many hints in output | Use `--quiet` or `-q` to suppress all hints and tips. |

@@ -391,8 +391,29 @@ class TestDoctor:
         assert "chrome" in captured.out
         assert "PO token is set" in captured.out
 
-    def test_doctor_warns_no_po_token(self, tmp_path, capfd):
-        """doctor should WARN when PO token is not set."""
+    def test_doctor_warns_no_po_token_no_provider(self, tmp_path, capfd):
+        """doctor should WARN when PO token is not set and no provider is installed."""
+        db = tmp_path / "test.db"
+        from importlib.metadata import PackageNotFoundError
+        original_distribution = __import__("importlib.metadata", fromlist=["distribution"]).distribution
+        def _mock_distribution(name):
+            if name == "yt-dlp-get-pot-rustypipe":
+                raise PackageNotFoundError(name)
+            return original_distribution(name)
+        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
+             patch("subprocess.run") as mock_run, \
+             patch("yt_artist.llm.check_connectivity"), \
+             patch("importlib.metadata.distribution", side_effect=_mock_distribution), \
+             patch.dict(os.environ, {}, clear=True):
+            mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
+            code = _run_cli("doctor", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "WARN" in captured.out
+        assert "No PO token and no auto-provider" in captured.out
+
+    def test_doctor_ok_with_provider_installed(self, tmp_path, capfd):
+        """doctor should show OK when PO token provider is installed (even without manual token)."""
         db = tmp_path / "test.db"
         with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
              patch("subprocess.run") as mock_run, \
@@ -402,8 +423,8 @@ class TestDoctor:
             code = _run_cli("doctor", db_path=db)
         assert code == 0
         captured = capfd.readouterr()
-        assert "WARN" in captured.out
-        assert "PO token not set" in captured.out
+        # With yt-dlp-get-pot-rustypipe installed (it's a dependency), doctor should see the provider
+        assert "PO token provider installed" in captured.out or "PO token is set" in captured.out
 
     def test_doctor_shows_summary(self, tmp_path, capfd):
         """doctor should show a summary line at the end."""

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import tempfile
@@ -143,9 +144,9 @@ _BOT_PATTERNS = [
 ]
 
 _AUTH_GUIDANCE = (
-    "  Set YT_ARTIST_COOKIES_BROWSER=chrome  (or firefox/safari)\n"
-    "  Set YT_ARTIST_PO_TOKEN=<your-token>   (proof of origin)\n"
-    "  PO token guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token\n"
+    "  Set YT_ARTIST_COOKIES_BROWSER=chrome         (or firefox/safari)\n"
+    "  Set YT_ARTIST_PO_TOKEN=web.subs+<token>      (proof of origin)\n"
+    "  PO token guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide\n"
     "  Run `yt-artist doctor` to check your configuration."
 )
 
@@ -305,6 +306,29 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
         " Note: Some videos show subtitles in the browser player but don't expose them via the API. "
         "Try another video or check if the video has region restrictions."
     )
+    # Check PO token status and provider plugin — give the most relevant hint.
+    has_manual_token = bool((os.environ.get("YT_ARTIST_PO_TOKEN") or "").strip())
+    has_provider = False
+    try:
+        from importlib.metadata import distribution
+        distribution("yt-dlp-get-pot-rustypipe")
+        has_provider = True
+    except Exception:
+        pass
+    if not has_manual_token and not has_provider:
+        msg += (
+            "\n\n  No PO token provider installed — this is the most common cause of subtitle failures.\n"
+            "  Fix: pip install yt-dlp-get-pot-rustypipe   (recommended, generates tokens automatically)\n"
+            "  Or:  export YT_ARTIST_PO_TOKEN=web.subs+<token>   (manual fallback)\n"
+            "  Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide\n"
+            "  Run `yt-artist doctor` to check your full configuration."
+        )
+    elif not has_manual_token and has_provider:
+        msg += (
+            "\n\n  PO token provider (rustypipe) is installed but subtitles still failed.\n"
+            "  This video may genuinely have no downloadable subtitles.\n"
+            "  Run `yt-artist doctor` to check your configuration."
+        )
     msg += hint
     raise FileNotFoundError(msg)
 
