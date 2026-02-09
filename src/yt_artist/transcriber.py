@@ -1,0 +1,298 @@
+"""Fetch video transcript via yt-dlp; save to DB and optional file."""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import subprocess
+import tempfile
+import time as _time
+from pathlib import Path
+from typing import List, Optional, Tuple, Union
+
+from yt_artist.storage import Storage
+from yt_artist.yt_dlp_util import yt_dlp_cmd as _yt_dlp_cmd
+
+log = logging.getLogger("yt_artist.transcriber")
+
+
+def _get_available_sub_langs(video_url: str) -> List[str]:
+    """Run yt-dlp -j to get exact subtitle/automatic_caption language codes offered by the video."""
+    cmd = _yt_dlp_cmd() + [
+        "--skip-download",
+        "--no-warnings",
+        "-j",
+        video_url,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("yt-dlp timed out detecting subtitle languages for %s", video_url)
+        return []
+    if result.returncode != 0:
+        log.debug("yt-dlp subtitle detection exited %d for %s", result.returncode, video_url)
+        return []
+    try:
+        info = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        log.debug("yt-dlp returned non-JSON for subtitle detection on %s", video_url)
+        return []
+    codes = []
+    for key in ("subtitles", "automatic_captions"):
+        raw = info.get(key) or {}
+        if isinstance(raw, dict):
+            codes.extend(raw.keys())
+    # Prefer English-like codes first
+    def rank(c: str) -> Tuple[int, str]:
+        c_lower = c.lower()
+        if c_lower.startswith("en") or ".en" in c_lower or c_lower == "a.en":
+            return (0, c)
+        return (1, c)
+    codes = sorted(set(codes), key=rank)
+    return codes
+
+
+def extract_video_id(url_or_id: str) -> str:
+    """Return video id from URL or bare id."""
+    if not url_or_id:
+        raise ValueError("url_or_id is required")
+    # Bare id (e.g. dQw4w9WgXcQ - typically 11 chars)
+    if re.match(r"^[\w-]{8,}$", url_or_id):
+        return url_or_id
+    # ?v=id or &v=id
+    m = re.search(r"[?&]v=([\w-]{8,})", url_or_id)
+    if m:
+        return m.group(1)
+    # youtu.be/id
+    m = re.search(r"youtu\.be/([\w-]{8,})", url_or_id)
+    if m:
+        return m.group(1)
+    raise ValueError(f"Cannot extract video id from: {url_or_id}")
+
+
+def _find_subtitle_file(out_dir: Path) -> Optional[Tuple[str, str]]:
+    """Return (raw_text, format) from first subtitle file, preferring English-named files."""
+    exts = (".vtt", ".srt", ".ass", ".json3")
+    files = []
+    for f in out_dir.rglob("*") if out_dir.exists() else []:
+        if f.is_file() and f.suffix.lower() in exts:
+            files.append(f)
+    if not files:
+        return None
+    # Prefer filename containing .en. or .en (e.g. id.en.vtt) so we get English when multiple exist
+    files.sort(key=lambda p: (0 if ".en" in p.stem.lower() else 1, p.name))
+    f = files[0]
+    raw = f.read_text(encoding="utf-8", errors="replace")
+    fmt = f.suffix.lstrip(".").lower()
+    return (_subs_to_plain_text(raw, fmt), fmt)
+
+
+def _build_sub_download_cmd(video_url: str, out_tmpl: str, sub_langs: Optional[str]) -> List[str]:
+    """Build yt-dlp subtitle download command."""
+    cmd = _yt_dlp_cmd() + [
+        "--write-auto-sub",
+        "--write-sub",
+        "--skip-download",
+        "--no-warnings",
+        "-o",
+        out_tmpl,
+        "--sub-format",
+        "vtt/best",
+    ]
+    if sub_langs is not None:
+        cmd.extend(["--sub-langs", sub_langs])
+    cmd.append(video_url)
+    return cmd
+
+
+def _is_rate_limited(stderr: str) -> bool:
+    """Return True if yt-dlp stderr indicates a YouTube rate-limit (HTTP 429 or similar)."""
+    lower = stderr.lower()
+    return "429" in lower or "too many requests" in lower or "rate limit" in lower
+
+
+def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
+    """
+    Run yt-dlp --write-auto-sub --write-sub --skip-download; return (raw_text, format).
+
+    Strategy (sequential, rate-limit safe):
+      1. Optimistic English download (en,a.en,en-US,en-GB,en.*) — succeeds for
+         ~80% of YouTube videos with no extra metadata request.
+      2. On miss: fetch subtitle language list via -j, then retry with detected languages.
+      3. Final fallbacks: --sub-langs all, then omit --sub-langs.
+
+    Each subprocess call respects --sleep-requests / --sleep-subtitles set in
+    yt_dlp_cmd().  Exponential backoff is applied on HTTP 429 errors.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_tmpl = str(out_dir.resolve()).replace("\\", "/") + "/%(id)s.%(ext)s"
+
+    # --- Step 1: Optimistic English download (single yt-dlp call) ---
+    cmd = _build_sub_download_cmd(video_url, out_tmpl, "en,a.en,en-US,en-GB,en.*")
+    backoff = 5  # initial backoff for 429 retries (seconds)
+    max_retries_429 = 3
+    last_stdout, last_stderr = "", ""
+
+    for retry_429 in range(max_retries_429 + 1):
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120, cwd=str(out_dir),
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("yt-dlp optimistic English download timed out for %s", video_url)
+            break
+        last_stdout = result.stdout or ""
+        last_stderr = result.stderr or ""
+        if _is_rate_limited(last_stderr):
+            if retry_429 < max_retries_429:
+                log.warning("Rate limited (429) during optimistic download for %s — backing off %ds", video_url, backoff)
+                _time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+                continue
+            else:
+                log.error("Rate limited after %d retries for %s — aborting.", max_retries_429, video_url)
+                raise FileNotFoundError(
+                    f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
+                    "Try again later or reduce --concurrency."
+                )
+        found = _find_subtitle_file(out_dir)
+        if found:
+            log.debug("Optimistic English subtitle download succeeded for %s", video_url)
+            return found
+        break  # No 429, but no file found — fall through to metadata-informed retries.
+
+    # --- Step 2: Metadata-informed retry (only runs if optimistic English missed) ---
+    json_langs = _get_available_sub_langs(video_url)
+
+    if json_langs:
+        sub_langs_list: List[Optional[str]] = [",".join(json_langs), "all", None]
+    else:
+        sub_langs_list = [
+            "all",  # fallback: accept any available language
+            None,  # final fallback: omit --sub-langs entirely, let yt-dlp pick
+        ]
+
+    backoff = 5  # reset for retry loop
+    for attempt, sub_langs in enumerate(sub_langs_list):
+        cmd = _build_sub_download_cmd(video_url, out_tmpl, sub_langs)
+        for retry_429 in range(max_retries_429 + 1):
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=120, cwd=str(out_dir),
+                )
+            except subprocess.TimeoutExpired:
+                log.warning("yt-dlp subtitle download timed out (attempt %d) for %s", attempt + 1, video_url)
+                break
+            last_stdout = result.stdout or ""
+            last_stderr = result.stderr or ""
+            if _is_rate_limited(last_stderr):
+                if retry_429 < max_retries_429:
+                    log.warning("Rate limited (429) on attempt %d for %s — backing off %ds", attempt + 1, video_url, backoff)
+                    _time.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                    continue
+                else:
+                    raise FileNotFoundError(
+                        f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
+                        "Try again later or reduce --concurrency."
+                    )
+            break  # No 429 — evaluate result.
+        else:
+            continue  # All 429 retries exhausted for this sub_langs variant; try next.
+
+        found = _find_subtitle_file(out_dir)
+        if found:
+            return found
+        if result.returncode != 0:
+            err = (last_stderr or last_stdout).strip()
+            raise FileNotFoundError(
+                f"yt-dlp failed (exit {result.returncode}). {err}"
+            ) if err else result.check_returncode()
+
+    yt_out = (last_stdout + last_stderr).strip()
+    hint = f" yt-dlp: {yt_out[:400]}" if yt_out else ""
+    langs_hint = f" Detected subtitle languages: {', '.join(json_langs[:10])}" if json_langs else ""
+    msg = (
+        f"No subtitle file written under {out_dir}. "
+        "yt-dlp reports no subtitle tracks are available for download."
+    )
+    msg += langs_hint
+    msg += (
+        " Note: Some videos show subtitles in the browser player but don't expose them via the API. "
+        "Try another video or check if the video has region restrictions."
+    )
+    msg += hint
+    raise FileNotFoundError(msg)
+
+
+def _subs_to_plain_text(content: str, format_hint: str) -> str:
+    """Strip timestamps, metadata, and consecutive duplicates; return plain text."""
+    lines = content.strip().splitlines()
+    text_lines: list[str] = []
+    prev_line = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # WEBVTT header
+        if line.upper().startswith("WEBVTT") or line.upper().startswith("KIND:"):
+            continue
+        # Numbered line (SRT)
+        if re.match(r"^\d+$", line):
+            continue
+        # Timestamp line (00:00:00.000 --> 00:00:01.000 or 00:00:00,000)
+        if re.match(r"^\d{2}:\d{2}(:\d{2})?[.,]\d{3}\s*-->\s*\d{2}:\d{2}", line):
+            continue
+        # VTT cue settings (align:start etc.)
+        if re.match(r"^\s*(?:align|position|line|size):", line):
+            continue
+        # Remove inline timestamps in VTT (e.g. <00:00:00.000>)
+        line = re.sub(r"<\d{2}:\d{2}(:\d{2})?\.\d{3}>", "", line)
+        line = re.sub(r"<[^>]+>", "", line)  # other tags
+        line = line.strip()
+        # Skip consecutive duplicate lines (common in auto-generated VTT)
+        if line and line != prev_line:
+            text_lines.append(line)
+            prev_line = line
+    return "\n".join(text_lines)
+
+
+def transcribe(
+    video_url_or_id: str,
+    storage: Storage,
+    *,
+    artist_id: Optional[str] = None,
+    write_transcript_file: bool = False,
+    data_dir: Optional[Union[str, Path]] = None,
+) -> str:
+    """
+    Fetch transcript for the video, save to Transcript table and optionally to
+    data/artists/{artist_id}/transcripts/{video_id}.txt.
+    Returns video_id.
+    """
+    video_id = extract_video_id(video_url_or_id)
+    url = (
+        video_url_or_id
+        if video_url_or_id.startswith("http")
+        else f"https://www.youtube.com/watch?v={video_id}"
+    )
+
+    with tempfile.TemporaryDirectory(prefix="yt_artist_") as tmp:
+        out_dir = Path(tmp) / "subs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        raw_text, fmt = _run_yt_dlp_subtitles(url, out_dir)
+
+    storage.save_transcript(video_id=video_id, raw_text=raw_text, format=fmt)
+
+    if write_transcript_file and data_dir is not None and artist_id:
+        data_dir = Path(data_dir)
+        transcript_dir = data_dir / "artists" / artist_id / "transcripts"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        (transcript_dir / f"{video_id}.txt").write_text(raw_text, encoding="utf-8")
+
+    return video_id

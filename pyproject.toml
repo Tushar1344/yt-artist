@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yt-artist"
+version = "0.1.0"
+description = "Fetch YouTube channel URLs, transcribe videos, and generate AI summaries from transcripts."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "yt-dlp>=2024.1.1",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+mcp = [
+    "mcp>=1.0.0",
+]
+search = [
+    "duckduckgo-search>=6.0",
+]
+
+[project.scripts]
+yt-artist = "yt_artist.cli:main"
+yt-artist-mcp = "yt_artist.mcp_server:run_mcp_server"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v"
+
+[tool.setuptools.packages.find]
+where = ["src"]

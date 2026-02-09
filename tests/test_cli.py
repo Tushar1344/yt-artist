@@ -1,0 +1,328 @@
+"""Tests for CLI dispatch, prompt resolution, and dependency auto-creation."""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from yt_artist.cli import _resolve_prompt_id, main
+from yt_artist.storage import Storage
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_store(tmp_path: Path) -> Storage:
+    db = tmp_path / "test.db"
+    store = Storage(db)
+    store.ensure_schema()
+    return store
+
+
+def _seed_artist_and_video(store: Storage) -> None:
+    """Insert a minimal artist + video for use in tests."""
+    store.upsert_artist(
+        artist_id="@TestArtist",
+        name="Test Artist",
+        channel_url="https://www.youtube.com/@TestArtist",
+        urllist_path="data/artists/@TestArtist/urllist.md",
+    )
+    store.upsert_video(
+        video_id="testvid00001",
+        artist_id="@TestArtist",
+        url="https://www.youtube.com/watch?v=testvid00001",
+        title="Test Video",
+    )
+
+
+def _seed_prompt(store: Storage, prompt_id: str = "p1") -> None:
+    store.upsert_prompt(
+        prompt_id=prompt_id,
+        name="Test Prompt",
+        template="Summarize: {artist} - {video}",
+    )
+
+
+def _run_cli(*args: str, db_path: str | Path = "") -> int:
+    """Call main() with patched sys.argv; return exit code (0 on success)."""
+    # Clear root logger handlers so basicConfig() in main() reconfigures
+    # with the current sys.stderr (which capfd may have redirected).
+    import logging as _logging
+    _logging.root.handlers.clear()
+
+    argv = ["yt-artist"]
+    if db_path:
+        argv += ["--db", str(db_path)]
+    argv += list(args)
+    with patch.object(sys, "argv", argv):
+        try:
+            main()
+            return 0
+        except SystemExit as exc:
+            return exc.code if exc.code else 0
+
+
+# ---------------------------------------------------------------------------
+# _resolve_prompt_id
+# ---------------------------------------------------------------------------
+
+class TestResolvePromptId:
+    """Tests for the prompt-resolution fallback chain."""
+
+    def test_explicit_flag_found(self, tmp_path):
+        store = _make_store(tmp_path)
+        _seed_prompt(store, "p1")
+        assert _resolve_prompt_id(store, "@TestArtist", "p1") == "p1"
+
+    def test_explicit_flag_missing_raises(self, tmp_path):
+        store = _make_store(tmp_path)
+        with pytest.raises(SystemExit, match="not found"):
+            _resolve_prompt_id(store, "@TestArtist", "nonexistent")
+
+    def test_uses_artist_default(self, tmp_path):
+        store = _make_store(tmp_path)
+        _seed_artist_and_video(store)
+        _seed_prompt(store, "p2")
+        store.set_artist_default_prompt("@TestArtist", "p2")
+        assert _resolve_prompt_id(store, "@TestArtist", None) == "p2"
+
+    def test_uses_env_fallback(self, tmp_path):
+        store = _make_store(tmp_path)
+        _seed_prompt(store, "env-prompt")
+        with patch.dict(os.environ, {"YT_ARTIST_DEFAULT_PROMPT": "env-prompt"}):
+            assert _resolve_prompt_id(store, "@TestArtist", None) == "env-prompt"
+
+    def test_uses_first_in_db(self, tmp_path):
+        store = _make_store(tmp_path)
+        _seed_prompt(store, "alpha")
+        _seed_prompt(store, "beta")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("YT_ARTIST_DEFAULT_PROMPT", None)
+            result = _resolve_prompt_id(store, None, None)
+        assert result == "alpha"
+
+    def test_no_custom_prompts_uses_builtin_default(self, tmp_path):
+        """When no custom prompts exist, the built-in 'default' prompt is returned."""
+        store = _make_store(tmp_path)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("YT_ARTIST_DEFAULT_PROMPT", None)
+            # ensure_schema auto-creates 'default' prompt → should not raise
+            result = _resolve_prompt_id(store, None, None)
+        assert result == "default"
+
+
+# ---------------------------------------------------------------------------
+# CLI: add-prompt / list-prompts
+# ---------------------------------------------------------------------------
+
+class TestPromptCommands:
+
+    def test_add_and_list_prompts(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        code = _run_cli(
+            "add-prompt",
+            "--id", "my-prompt",
+            "--name", "My Prompt",
+            "--template", "Summarize {video} by {artist}",
+            db_path=db,
+        )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "Prompt saved" in captured.out
+
+        code = _run_cli("list-prompts", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "my-prompt" in captured.out
+        assert "My Prompt" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# CLI: fetch-channel (mocked)
+# ---------------------------------------------------------------------------
+
+class TestFetchChannel:
+
+    def test_fetch_channel_happy_path(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        fake_return = ("data/artists/@Test/urllist.md", 5)
+        with patch("yt_artist.cli.fetch_channel", return_value=fake_return):
+            code = _run_cli(
+                "fetch-channel",
+                "https://www.youtube.com/@Test",
+                db_path=db,
+            )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "Videos:  5" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# CLI: transcribe (mocked)
+# ---------------------------------------------------------------------------
+
+class TestTranscribe:
+
+    def test_single_video_transcribe(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path / "sub" / "test.db")  # separate to avoid conflict
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+
+        with patch("yt_artist.cli.transcribe", return_value="testvid00001"):
+            code = _run_cli(
+                "transcribe",
+                "https://www.youtube.com/watch?v=testvid00001",
+                db_path=db,
+            )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "Transcribed: testvid00001" in captured.out
+
+    def test_bulk_transcribe_auto_fetches(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        fake_fetch = ("urllist.md", 1)
+
+        with patch("yt_artist.cli.fetch_channel", return_value=fake_fetch) as mock_fetch, \
+             patch("yt_artist.cli.transcribe", return_value="testvid00001"):
+            # Storage is empty so artist is missing → should trigger auto-fetch
+            code = _run_cli(
+                "transcribe",
+                "--artist-id", "@Unknown",
+                db_path=db,
+            )
+        # fetch_channel should have been called
+        assert mock_fetch.called
+
+    def test_transcribe_requires_video_or_artist(self, tmp_path):
+        db = tmp_path / "test.db"
+        code = _run_cli("transcribe", db_path=db)
+        assert code != 0
+
+
+# ---------------------------------------------------------------------------
+# CLI: summarize (mocked)
+# ---------------------------------------------------------------------------
+
+class TestSummarize:
+
+    def test_single_video_summarize(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+        _seed_prompt(store, "p1")
+        store.save_transcript(video_id="testvid00001", raw_text="Hello world transcript.", format="vtt")
+
+        with patch("yt_artist.cli.summarize", return_value="testvid00001:p1") as mock_sum, \
+             patch("yt_artist.cli.ensure_artist_and_video_for_video_url", return_value=("@TestArtist", "testvid00001")), \
+             patch("yt_artist.cli._check_llm"):
+            # Mock get_summaries_for_video to return the summary content
+            original_get = store.get_summaries_for_video
+
+            def fake_get(vid):
+                return [{"prompt_id": "p1", "content": "Great summary.", "video_id": vid, "created_at": "now"}]
+
+            with patch.object(store, "get_summaries_for_video", side_effect=fake_get):
+                code = _run_cli(
+                    "summarize",
+                    "testvid00001",
+                    "--prompt", "p1",
+                    db_path=db,
+                )
+        assert code == 0
+
+    def test_summarize_requires_video_or_artist(self, tmp_path):
+        db = tmp_path / "test.db"
+        code = _run_cli("summarize", db_path=db)
+        assert code != 0
+
+
+# ---------------------------------------------------------------------------
+# CLI: set-default-prompt
+# ---------------------------------------------------------------------------
+
+class TestSetDefaultPrompt:
+
+    def test_set_default_prompt_happy_path(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+        _seed_prompt(store, "p1")
+
+        code = _run_cli(
+            "set-default-prompt",
+            "--artist-id", "@TestArtist",
+            "--prompt", "p1",
+            db_path=db,
+        )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "Default prompt" in captured.out
+
+    def test_set_default_prompt_missing_artist(self, tmp_path):
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_prompt(store, "p1")
+
+        code = _run_cli(
+            "set-default-prompt",
+            "--artist-id", "@Nonexistent",
+            "--prompt", "p1",
+            db_path=db,
+        )
+        assert code != 0
+
+    def test_set_default_prompt_missing_prompt(self, tmp_path):
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+
+        code = _run_cli(
+            "set-default-prompt",
+            "--artist-id", "@TestArtist",
+            "--prompt", "nonexistent",
+            db_path=db,
+        )
+        assert code != 0
+
+
+# ---------------------------------------------------------------------------
+# CLI: search-transcripts
+# ---------------------------------------------------------------------------
+
+class TestSearchTranscripts:
+
+    def test_search_transcripts_empty(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+
+        code = _run_cli("search-transcripts", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "No transcripts found" in captured.out
+
+    def test_search_transcripts_with_data(self, tmp_path, capfd):
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+        store.save_transcript(video_id="testvid00001", raw_text="Hello world.", format="vtt")
+
+        code = _run_cli(
+            "search-transcripts",
+            "--artist-id", "@TestArtist",
+            db_path=db,
+        )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "testvid00001" in captured.out
