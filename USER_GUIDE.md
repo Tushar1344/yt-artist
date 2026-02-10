@@ -222,6 +222,36 @@ Cookies and PO token can be used together (they serve different purposes: cookie
 - **`YT_ARTIST_SLEEP_REQUESTS`** — yt-dlp `--sleep-requests` value in seconds (default: 1.5).
 - **`YT_ARTIST_SLEEP_SUBTITLES`** — yt-dlp `--sleep-subtitles` value in seconds (default: 2).
 
+### Bulk transcription and rate limits
+
+YouTube rate-limits subtitle downloads by IP address. Without cookies, all requests are anonymous and share a low per-IP quota. In testing, a 459-video bulk transcribe hit hard 429 (rate limit) errors after ~300 videos, slowing from ~15 seconds/video to ~35 minutes/video.
+
+**For bulk runs (50+ videos), using cookies is strongly recommended.** Authenticated requests get significantly higher rate limits because YouTube ties them to a real account rather than an anonymous IP.
+
+```bash
+export YT_ARTIST_COOKIES_BROWSER=chrome
+yt-artist doctor                              # verify: "Cookies: using browser 'chrome'"
+yt-artist transcribe --artist-id @channel     # bulk transcribe with auth
+```
+
+**Tradeoffs of using cookies:**
+
+| | Without cookies | With cookies |
+|---|---|---|
+| **Rate limits** | Low — YouTube throttles aggressively after ~300 requests | Higher — authenticated users get more lenient limits |
+| **Privacy** | Anonymous; no account linked | Ties traffic to your Google account |
+| **VPN impact** | Worse — VPN IPs are shared across users, so your quota is lower | Better — account-level quota, less affected by shared IP |
+| **Risk** | None to your account | Excessive automated use could trigger account warnings |
+| **Setup** | Nothing needed | Must be logged into YouTube in that browser |
+
+**Recommendation:** Use a secondary/throwaway Google account for bulk operations. This gives you the rate-limit benefit without risking your primary account.
+
+**Additional tips for large channels:**
+- Turn off VPN if possible — VPN shared IPs have lower base quotas.
+- Use `YT_ARTIST_MAX_CONCURRENCY=1` to reduce request rate (slower but less likely to trigger limits).
+- If rate-limited, stop and wait 2-4 hours before resuming. The tool skips already-transcribed videos, so you can resume safely.
+- Increase sleep intervals for extra safety: `YT_ARTIST_SLEEP_REQUESTS=3 YT_ARTIST_SLEEP_SUBTITLES=5`.
+
 ---
 
 ## Troubleshooting

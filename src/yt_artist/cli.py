@@ -450,6 +450,17 @@ def _cmd_transcribe(args: argparse.Namespace, storage: Storage, data_dir: Path) 
             except Exception as exc:  # noqa: BLE001
                 return (v["id"], str(exc))
 
+        # Warn if bulk transcribing 50+ videos without cookies (rate-limit risk)
+        if len(to_do) >= 50 and not _quiet:
+            from yt_artist.yt_dlp_util import get_auth_config
+            auth = get_auth_config()
+            if not auth["cookies_browser"] and not auth["cookies_file"]:
+                _hint(
+                    "\u26a0\ufe0f  Bulk transcription without cookies: YouTube may rate-limit after ~300 videos.",
+                    "   For higher rate limits, set: export YT_ARTIST_COOKIES_BROWSER=chrome",
+                    "   See: yt-artist doctor   or   USER_GUIDE.md 'Bulk transcription and rate limits'",
+                )
+
         # Suggest --bg for large batches (foreground only)
         if not _bg_job_id:
             from yt_artist.jobs import maybe_suggest_background
@@ -905,6 +916,7 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     else:
         _warn(
             "No cookies configured. Some videos (age-restricted, members-only) may fail.\n"
+            "         Cookies also help avoid rate limits during bulk transcription (50+ videos).\n"
             "         Set YT_ARTIST_COOKIES_BROWSER=chrome  (or firefox/safari)"
         )
     print()

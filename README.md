@@ -106,7 +106,7 @@ yt-artist quickstart
 - **Per-artist default prompt:** Set with `set-default-prompt`; fallback: env `YT_ARTIST_DEFAULT_PROMPT` or first prompt in DB.
 - **YouTube authentication (for transcription):** A PO token provider (`yt-dlp-get-pot-rustypipe`) is auto-installed to handle YouTube's bot detection automatically — no manual token setup needed.
   - `YT_ARTIST_PO_TOKEN` — Manual fallback: proof-of-origin token. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide).
-  - `YT_ARTIST_COOKIES_BROWSER` — Browser name for `yt-dlp --cookies-from-browser` (e.g. `chrome`, `firefox`, `safari`). Only needed for age-restricted or members-only videos.
+  - `YT_ARTIST_COOKIES_BROWSER` — Browser name for `yt-dlp --cookies-from-browser` (e.g. `chrome`, `firefox`, `safari`). Required for age-restricted/members-only videos. **Strongly recommended for bulk transcription (50+ videos)** — authenticated requests get much higher YouTube rate limits. See [USER_GUIDE.md](USER_GUIDE.md) "Bulk transcription and rate limits".
   - `YT_ARTIST_COOKIES_FILE` — Path to a Netscape-format cookies file (alternative to browser cookies).
   - Run `yt-artist doctor` to check your authentication setup.
 - **LLM (for summarize):** Uses **local Ollama by default** when `OPENAI_API_KEY` is not set.

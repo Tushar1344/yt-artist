@@ -224,7 +224,7 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
                 log.error("Rate limited after %d retries for %s — aborting.", max_retries_429, video_url)
                 raise FileNotFoundError(
                     f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
-                    "Try again later or reduce --concurrency."
+                    "Try again later, reduce --concurrency, or set YT_ARTIST_COOKIES_BROWSER=chrome for higher rate limits."
                 )
         # Check for auth/bot errors before wasting retries.
         err_type, err_msg = _classify_yt_dlp_error(last_stderr)
@@ -271,7 +271,7 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
                 else:
                     raise FileNotFoundError(
                         f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
-                        "Try again later or reduce --concurrency."
+                        "Try again later, reduce --concurrency, or set YT_ARTIST_COOKIES_BROWSER=chrome for higher rate limits."
                     )
             break  # No 429 — evaluate result.
         else:

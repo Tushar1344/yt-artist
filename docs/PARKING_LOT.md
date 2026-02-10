@@ -104,6 +104,23 @@ DB size:      12.4 MB
 
 ---
 
+### 21. Pipeline parallelism for bulk summarize `[observed in testing]`
+**Why:** When `summarize --artist-id @X` needs to transcribe missing videos first, it blocks all summarization until every transcript is done. On a 459-video channel (@hubermanlab), this meant Ollama sat idle for 10+ hours while YouTube transcripts trickled in. Running separate transcribe and summarize commands concurrently caused duplicate YouTube requests and 429 rate-limit escalation.
+
+**Scope:**
+- In bulk summarize, run transcribe and summarize as a producer-consumer pipeline: transcribe feeds transcripts into the DB, summarize polls for new transcripts and processes them concurrently.
+- DB-polling approach (not queue): summarize worker periodically queries for "transcribed but not summarized" videos. Simpler, idempotent, crash-recoverable.
+- Split `MAX_CONCURRENCY` budget between transcribe and summarize workers.
+- No change to standalone `transcribe` or `summarize` (when all transcripts exist).
+
+**Evidence:** @hubermanlab bulk run (2026-02-10): 341/459 transcripts took ~10h (YouTube throttled after ~300). Summarize was blocked the entire time. With pipeline, first summary would arrive in ~15s instead of hours.
+
+**ADR:** [ADR-0012](adr/0012-pipeline-parallelism.md)
+
+**Effort:** Medium. Polling loop + termination logic + concurrency budget splitting. Existing ThreadPoolExecutor infrastructure reusable.
+
+---
+
 ## P2: Quality of Life
 
 ### 8. Transcript quality scoring `[suggestion]`
