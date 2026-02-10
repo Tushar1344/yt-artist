@@ -25,6 +25,7 @@ A portable command-line utility for Mac that fetches YouTube channel video lists
 - **yt-dlp** — The install script installs it as a dependency.
 - **Ollama (optional but recommended)** — For local AI summaries. Install from [ollama.com](https://ollama.com), then run e.g. `ollama run mistral`.
 - **duckduckgo-search (optional)** — For `build-artist-prompt` web search. Install with `pip install duckduckgo-search` or `pip install yt-artist[search]`.
+- After install, run `yt-artist doctor` to verify YouTube auth (PO token) and LLM.
 
 ---
 
@@ -66,20 +67,25 @@ cd ~/my-yt-data
 export DB=./yt.db
 ```
 
-1. **Bulk urllist for a channel (optional; summarize can fetch it for you):**
+1. **Verify your setup** (yt-dlp, PO token, LLM):
+   ```bash
+   yt-artist doctor
+   ```
+
+2. **Bulk urllist for a channel (optional; summarize can fetch it for you):**
    ```bash
    yt-artist --db "$DB" --data-dir . fetch-channel "https://www.youtube.com/@hubermanlab"
    ```
    Or use the alias: `yt-artist --db "$DB" urllist "https://www.youtube.com/@hubermanlab"`
 
-2. **Transcribe one video or all videos for an artist:**
+3. **Transcribe one video or all videos for an artist:**
    ```bash
    yt-artist --db "$DB" transcribe "https://www.youtube.com/watch?v=bdsc3Spm6Sw"
    yt-artist --db "$DB" transcribe --artist-id @hubermanlab
    ```
    If the artist or videos aren’t in the DB, you’ll see: `Dependencies: artist/videos missing → fetching urllist...` then transcribing.
 
-3. **Add a prompt and set it as default for an artist:**
+4. **Add a prompt and set it as default for an artist:**
    ```bash
    yt-artist --db "$DB" add-prompt --id short --name "Short summary" \
      --template "Summarize in 2-3 sentences for {audience}. Artist: {artist}. Video: {video}." \
@@ -87,7 +93,7 @@ export DB=./yt.db
    yt-artist --db "$DB" set-default-prompt --artist-id @hubermanlab --prompt short
    ```
 
-4. **Summarize one video or all transcribed videos for an artist:**
+5. **Summarize one video or all transcribed videos for an artist:**
    ```bash
    yt-artist --db "$DB" summarize "https://www.youtube.com/watch?v=bdsc3Spm6Sw"
    yt-artist --db "$DB" summarize bdsc3Spm6Sw --prompt short
@@ -95,7 +101,7 @@ export DB=./yt.db
    ```
    If the artist/videos or transcripts are missing, you’ll see short “Dependencies: …” lines; then the tool creates them and continues.
 
-5. **Optional: build “about” text for an artist from web search and set as default prompt:**
+6. **Optional: build "about" text for an artist from web search and set as default prompt:**
    ```bash
    yt-artist --db "$DB" build-artist-prompt --artist-id @hubermanlab --save-as-default
    ```
@@ -183,11 +189,18 @@ export YT_ARTIST_PO_TOKEN=web.subs+<token_from_browser>
 yt-artist doctor   # verify it's detected
 ```
 
-### Cookies (for restricted content)
+### Cookies (for restricted content or as PO token fallback)
 
-Some videos (age-restricted, member-only) also require authentication cookies. Set **one** of these:
+Cookies authenticate you as a logged-in YouTube user. They are needed for age-restricted or members-only videos, and can also serve as a fallback if the automatic PO token provider doesn't work.
 
-- **`YT_ARTIST_COOKIES_BROWSER`** — Browser name to extract cookies from (e.g. `chrome`, `firefox`, `safari`). Uses `yt-dlp --cookies-from-browser`.
+| Method | Env var | What you need |
+|--------|---------|---------------|
+| From browser | `YT_ARTIST_COOKIES_BROWSER=chrome` | Nothing extra; just be logged into YouTube in that browser |
+| Manual (file) | `YT_ARTIST_COOKIES_FILE=/path/to/cookies.txt` | Netscape-format cookies.txt (export from browser or via yt-dlp) |
+
+Set **one** of these (browser wins if both are set):
+
+- **`YT_ARTIST_COOKIES_BROWSER`** — Browser name (`chrome`, `firefox`, or `safari`). Uses `yt-dlp --cookies-from-browser`. You must be logged into YouTube in that browser.
 - **`YT_ARTIST_COOKIES_FILE`** — Path to a Netscape-format cookies file. Uses `yt-dlp --cookies`.
 
 Example:
@@ -196,9 +209,11 @@ export YT_ARTIST_COOKIES_BROWSER=chrome
 yt-artist transcribe --artist-id @channel
 ```
 
-Cookies and PO token can be used together (they serve different purposes: cookies = session auth, PO token = proof of origin for bot detection).
+To confirm cookies are detected, run `yt-artist doctor` — you should see `Cookies: using browser 'chrome'` or `Cookies: using file '/path/to/cookies.txt'`.
 
-With the auto-provider installed (default), cookies are optional and only needed for restricted content.
+**Security note:** Using cookies ties YouTube traffic to your Google account. Prefer a secondary/throwaway account when using cookies with yt-artist/yt-dlp.
+
+Cookies and PO token can be used together (they serve different purposes: cookies = session auth, PO token = proof of origin for bot detection). With the auto-provider installed (default), cookies are optional and only needed for restricted content or as a fallback.
 
 ## Environment (rate limits & performance)
 
@@ -217,7 +232,7 @@ With the auto-provider installed (default), cookies are optional and only needed
 | Summarize says “Set a default prompt or pass --prompt” | Run `yt-artist set-default-prompt --artist-id @X --prompt short` or pass `--prompt short` to summarize. |
 | Summarize fails (401 / connection) | For Ollama: start it and run `ollama run mistral`. To force Ollama when an API key is set: `OPENAI_BASE_URL=http://localhost:11434/v1 yt-artist ... summarize ...` |
 | build-artist-prompt returns generic “about” | Install `duckduckgo-search` for web search: `pip install yt-artist[search]`. |
-| No transcript / transcribe fails | Run `yt-artist doctor`. If the PO token provider is missing: `pip install yt-dlp-get-pot-rustypipe`. Or set a manual token: `export YT_ARTIST_PO_TOKEN=web.subs+<token>`. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). |
+| No transcript / transcribe fails | Run `yt-artist doctor`. If the PO token provider is missing: `pip install yt-dlp-get-pot-rustypipe`. If automatic doesn't work, try browser cookies: `export YT_ARTIST_COOKIES_BROWSER=chrome` (must be logged into YouTube). Or set a manual token: `export YT_ARTIST_PO_TOKEN=web.subs+<token>`. See [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). |
 | "Sign in to confirm your age" | Video is age-restricted. Set `YT_ARTIST_COOKIES_BROWSER=chrome` and ensure you're logged into YouTube in that browser. |
 | "403 Forbidden" or "confirm you're not a bot" | YouTube is blocking automated access. Ensure the PO token provider is installed (`pip install yt-dlp-get-pot-rustypipe`) or set `YT_ARTIST_PO_TOKEN`. Run `yt-artist doctor` to verify. |
 | "Check your setup" | Run `yt-artist doctor` to see which components need configuration. |

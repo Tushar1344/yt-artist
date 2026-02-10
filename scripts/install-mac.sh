@@ -91,6 +91,24 @@ if [[ -n "$SHELL_RC" ]]; then
   fi
 fi
 
+# Verify PO token provider; self-heal if missing
+echo ""
+echo "Checking PO token provider..."
+if "$VENV/bin/python" -c "import importlib.metadata; importlib.metadata.distribution('yt-dlp-get-pot-rustypipe')" 2>/dev/null; then
+  echo "PO token provider: OK"
+else
+  echo "PO token provider not detected. Installing yt-dlp-get-pot-rustypipe..."
+  pip install -q yt-dlp-get-pot-rustypipe && \
+    "$VENV/bin/python" -c "import importlib.metadata; importlib.metadata.distribution('yt-dlp-get-pot-rustypipe')" 2>/dev/null
+  if [[ $? -eq 0 ]]; then
+    echo "PO token provider: OK (installed yt-dlp-get-pot-rustypipe)"
+  else
+    echo "WARN: PO token provider could not be installed. Transcribe may fail." >&2
+    echo "  Fix: $VENV/bin/pip install yt-dlp-get-pot-rustypipe" >&2
+    echo "  Then: yt-artist doctor" >&2
+  fi
+fi
+
 echo ""
 echo "Setup complete. Verifying..."
 echo "---"

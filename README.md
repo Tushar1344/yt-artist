@@ -28,6 +28,8 @@ If the script added PATH to your config, in new terminals run `source ~/.zshrc` 
 **If nothing shows in the terminal or the command isn’t found**, run from the repo instead:  
 `./scripts/yt-artist.sh --help` — see [USER_GUIDE.md](USER_GUIDE.md) “Not working in Mac terminal?”.
 
+Then run `yt-artist doctor` to verify yt-dlp and PO token (needed for transcribe).
+
 See [USER_GUIDE.md](USER_GUIDE.md) for quick start and command reference.
 
 ## Install (Linux / manual)
@@ -43,6 +45,8 @@ pip install .
 
 Then run with: `.venv/bin/yt-artist --help`
 
+Run `yt-artist doctor` to verify yt-dlp and PO token.
+
 For AI summaries, install [Ollama](https://ollama.com) and pull a model: `ollama run mistral`.
 
 ## Setup (developers)
@@ -54,7 +58,7 @@ pip install --upgrade pip setuptools wheel   # requires pip >= 22 for editable p
 pip install -e ".[dev]"
 ```
 
-Ensure **yt-dlp** is on your PATH (e.g. `pip install yt-dlp` in the same venv). For **summarize**, install `openai` (`pip install openai`). **Local Ollama is used by default** when `OPENAI_API_KEY` is not set; have Ollama running and a model pulled (e.g. `ollama run mistral`).
+Ensure **yt-dlp** is on your PATH (e.g. `pip install yt-dlp` in the same venv). Transcribe needs the PO token provider (installed with the package). Run `yt-artist doctor` to verify. For **summarize**, install `openai` (`pip install openai`). **Local Ollama is used by default** when `OPENAI_API_KEY` is not set; have Ollama running and a model pulled (e.g. `ollama run mistral`).
 
 ## Usage
 
@@ -155,10 +159,13 @@ yt-artist --db test_run.db list-prompts
 # 2. Fetch a channel (use any YouTube channel URL)
 yt-artist --db test_run.db --data-dir . fetch-channel "https://www.youtube.com/@SomeChannel"
 
-# 3. Transcribe one video (use a video ID from the urllist or any YouTube video URL)
+# 3. Verify setup (yt-dlp, PO token, LLM)
+yt-artist doctor
+
+# 4. Transcribe one video (use a video ID from the urllist or any YouTube video URL)
 yt-artist --db test_run.db transcribe "https://www.youtube.com/watch?v=VIDEO_ID"
 
-# 4. Summarize one video or all for artist (uses local Ollama by default; run `ollama run mistral` first)
+# 5. Summarize one video or all for artist (uses local Ollama by default; run `ollama run mistral` first)
 yt-artist --db test_run.db summarize VIDEO_ID
 yt-artist --db test_run.db summarize --artist-id @SomeChannel
 ```
