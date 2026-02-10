@@ -6,7 +6,9 @@ Plan and implement a feature: $ARGUMENTS
 3. Check docs/adr/ for architectural constraints
 4. Present: files to change, DB schema changes, test strategy, risks
 
-**Phase 2 — Implement** (after approval):
+**STOP. Do not proceed to Phase 2 until the user explicitly approves the plan.**
+
+**Phase 2 — Implement** (after explicit user approval only):
 1. Implement following existing patterns
 2. Write tests (mock external deps)
 3. Run full test suite
