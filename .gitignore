@@ -40,8 +40,8 @@ env/
 *.swp
 *.swo
 
-# AI tool configs (machine-specific)
-.claude/
+# AI tool configs — personal overrides only (shared configs committed)
+.claude/settings.local.json
 
 # Testing
 .pytest_cache/

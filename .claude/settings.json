@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(cat **/.env)",
+      "Bash(cat **/.env.*)",
+      "Bash(cat **/cookies.txt)",
+      "Bash(cat **/*cookies*.txt)",
+      "Bash(sudo *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-format.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-dangerous.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
