@@ -161,6 +161,19 @@ DB size:      12.4 MB
 
 ---
 
+### 22. Timestamped transcripts `[user requested]`
+**Why:** Currently `_subs_to_plain_text()` strips all VTT/SRT timestamps — only deduplicated plain text is stored. Timestamps are needed for future features: jump-to-moment links, most-replayed segment correlation, screenshot-at-timestamp, and chapter-aware summarization.
+
+**Scope:**
+- Store raw VTT alongside plain text (new `raw_vtt` column on transcripts table, or separate table)
+- Parse timestamps into structured format: `[(start_sec, end_sec, text), ...]`
+- Optional `--timestamps` flag on transcribe to enable (or always store both)
+- Expose via `search-transcripts --with-timestamps` or export
+
+**Effort:** Medium. VTT parsing exists; need schema change, storage method, and CLI surface.
+
+---
+
 ### 11. Tech debt: `--_bg-worker` re-execution pattern `[suggestion]`
 **Why:** Re-executing the CLI as a subprocess is fragile. If the user's environment changes (PATH, venv activation) between parent and child, the child may fail silently. Works now but should be flagged.
 
