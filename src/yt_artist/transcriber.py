@@ -182,7 +182,65 @@ def _classify_yt_dlp_error(stderr: str) -> Tuple[str, str]:
     return ("generic", "")
 
 
-def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
+_MAX_429_RETRIES = 3
+_INITIAL_BACKOFF = 5
+
+
+def _run_yt_dlp_with_backoff(
+    cmd: List[str],
+    video_url: str,
+    out_dir: Path,
+    label: str = "download",
+    storage: Optional[Storage] = None,
+) -> Tuple[str, str, bool]:
+    """Run a yt-dlp command with exponential backoff on HTTP 429.
+
+    Returns (stdout, stderr, timed_out).  Raises FileNotFoundError on
+    exhausted 429 retries or auth/bot errors.
+
+    When *storage* is provided, logs each request to the rate-limit monitor.
+    """
+    backoff = _INITIAL_BACKOFF
+    for attempt in range(_MAX_429_RETRIES + 1):
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120, cwd=str(out_dir),
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("yt-dlp %s timed out for %s", label, video_url)
+            return ("", "", True)
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        if _is_rate_limited(stderr):
+            if attempt < _MAX_429_RETRIES:
+                log.warning("Rate limited (429) during %s for %s — backing off %ds", label, video_url, backoff)
+                _time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+                continue
+            log.error("Rate limited after %d retries for %s — aborting.", _MAX_429_RETRIES, video_url)
+            raise FileNotFoundError(
+                f"YouTube rate-limited (HTTP 429) after {_MAX_429_RETRIES} retries for {video_url}. "
+                "Try again later, reduce --concurrency, or set YT_ARTIST_COOKIES_BROWSER=chrome for higher rate limits."
+            )
+        # Log the request for rate-limit monitoring
+        if storage is not None:
+            try:
+                from yt_artist.rate_limit import log_request
+                log_request(storage, "subtitle_download")
+            except Exception:  # noqa: BLE001
+                pass  # rate logging is best-effort; don't break transcription
+        # Non-429 error classification
+        err_type, err_msg = _classify_yt_dlp_error(stderr)
+        if err_type not in ("rate_limit", "generic"):
+            raise FileNotFoundError(
+                f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}"
+            )
+        return (stdout, stderr, False)
+    # Should not reach here but just in case
+    return ("", "", False)
+
+
+def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Storage] = None) -> Tuple[str, str]:
     """
     Run yt-dlp --write-auto-sub --write-sub --skip-download; return (raw_text, format).
 
@@ -197,46 +255,16 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     out_tmpl = str(out_dir.resolve()).replace("\\", "/") + "/%(id)s.%(ext)s"
+    last_stdout, last_stderr = "", ""
 
     # --- Step 1: Optimistic English download (single yt-dlp call) ---
     cmd = _build_sub_download_cmd(video_url, out_tmpl, "en,a.en,en-US,en-GB,en.*")
-    backoff = 5  # initial backoff for 429 retries (seconds)
-    max_retries_429 = 3
-    last_stdout, last_stderr = "", ""
-
-    for retry_429 in range(max_retries_429 + 1):
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120, cwd=str(out_dir),
-            )
-        except subprocess.TimeoutExpired:
-            log.warning("yt-dlp optimistic English download timed out for %s", video_url)
-            break
-        last_stdout = result.stdout or ""
-        last_stderr = result.stderr or ""
-        if _is_rate_limited(last_stderr):
-            if retry_429 < max_retries_429:
-                log.warning("Rate limited (429) during optimistic download for %s — backing off %ds", video_url, backoff)
-                _time.sleep(backoff)
-                backoff = min(backoff * 2, 60)
-                continue
-            else:
-                log.error("Rate limited after %d retries for %s — aborting.", max_retries_429, video_url)
-                raise FileNotFoundError(
-                    f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
-                    "Try again later, reduce --concurrency, or set YT_ARTIST_COOKIES_BROWSER=chrome for higher rate limits."
-                )
-        # Check for auth/bot errors before wasting retries.
-        err_type, err_msg = _classify_yt_dlp_error(last_stderr)
-        if err_type not in ("rate_limit", "generic"):
-            raise FileNotFoundError(
-                f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}"
-            )
+    last_stdout, last_stderr, timed_out = _run_yt_dlp_with_backoff(cmd, video_url, out_dir, "optimistic English", storage=storage)
+    if not timed_out:
         found = _find_subtitle_file(out_dir)
         if found:
             log.debug("Optimistic English subtitle download succeeded for %s", video_url)
             return found
-        break  # No 429, but no file found — fall through to metadata-informed retries.
 
     # --- Step 2: Metadata-informed retry (only runs if optimistic English missed) ---
     json_langs = _get_available_sub_langs(video_url)
@@ -249,42 +277,17 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path) -> Tuple[str, str]:
             None,  # final fallback: omit --sub-langs entirely, let yt-dlp pick
         ]
 
-    backoff = 5  # reset for retry loop
     for attempt, sub_langs in enumerate(sub_langs_list):
         cmd = _build_sub_download_cmd(video_url, out_tmpl, sub_langs)
-        for retry_429 in range(max_retries_429 + 1):
-            try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=120, cwd=str(out_dir),
-                )
-            except subprocess.TimeoutExpired:
-                log.warning("yt-dlp subtitle download timed out (attempt %d) for %s", attempt + 1, video_url)
-                break
-            last_stdout = result.stdout or ""
-            last_stderr = result.stderr or ""
-            if _is_rate_limited(last_stderr):
-                if retry_429 < max_retries_429:
-                    log.warning("Rate limited (429) on attempt %d for %s — backing off %ds", attempt + 1, video_url, backoff)
-                    _time.sleep(backoff)
-                    backoff = min(backoff * 2, 60)
-                    continue
-                else:
-                    raise FileNotFoundError(
-                        f"YouTube rate-limited (HTTP 429) after {max_retries_429} retries for {video_url}. "
-                        "Try again later, reduce --concurrency, or set YT_ARTIST_COOKIES_BROWSER=chrome for higher rate limits."
-                    )
-            break  # No 429 — evaluate result.
-        else:
-            continue  # All 429 retries exhausted for this sub_langs variant; try next.
-
+        stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
+            cmd, video_url, out_dir, f"attempt {attempt + 1}", storage=storage,
+        )
+        last_stdout, last_stderr = stdout, stderr
+        if timed_out:
+            continue
         found = _find_subtitle_file(out_dir)
         if found:
             return found
-        if result.returncode != 0:
-            err = (last_stderr or last_stdout).strip()
-            raise FileNotFoundError(
-                f"yt-dlp failed (exit {result.returncode}). {err}"
-            ) if err else result.check_returncode()
 
     # Classify the error — give specific guidance for auth/bot issues.
     combined_stderr = (last_stdout + last_stderr).strip()
@@ -388,7 +391,7 @@ def transcribe(
     with tempfile.TemporaryDirectory(prefix="yt_artist_") as tmp:
         out_dir = Path(tmp) / "subs"
         out_dir.mkdir(parents=True, exist_ok=True)
-        raw_text, fmt = _run_yt_dlp_subtitles(url, out_dir)
+        raw_text, fmt = _run_yt_dlp_subtitles(url, out_dir, storage=storage)
 
     storage.save_transcript(video_id=video_id, raw_text=raw_text, format=fmt)
 

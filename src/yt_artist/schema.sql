@@ -82,8 +82,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     error_message TEXT
 );
 
+-- Rate-limit monitoring: log each yt-dlp request for request-rate visibility
+CREATE TABLE IF NOT EXISTS request_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    request_type TEXT NOT NULL  -- 'subtitle_download', 'metadata', 'playlist'
+);
+
 CREATE INDEX IF NOT EXISTS idx_videos_artist_id ON videos(artist_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_video_id ON summaries(video_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_prompt_id ON summaries(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_screenshots_video_id ON screenshots(video_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);

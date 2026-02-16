@@ -1,6 +1,6 @@
 # The yt-artist Development Journey: Building a CLI Tool with Human-AI Collaboration
 
-*A record of iterative, collaborative development between a human developer and Claude across 5 sessions.*
+*A record of iterative, collaborative development between a human developer and Claude across 9 sessions.*
 
 ---
 
@@ -112,19 +112,78 @@ This led to:
 
 ---
 
+## Session 6: URL Validation & Security Docs (Phase 1)
+
+**Focus:** Safe-fail on bad YouTube URLs and security transparency.
+
+**What happened:**
+- Added URL format validation before calling yt-dlp — YouTube channel and video URLs are validated with clear error messages for malformed input, private/deleted videos, and age-restricted content.
+- 18 validation tests covering @handle, /channel/, /c/, /user/ formats, youtu.be short links, shorts, and embed URLs.
+- Added "Security considerations" section to USER_GUIDE.md: unencrypted DB warning, cookie file sensitivity, .gitignore coverage.
+
+**Result:** ~225 tests passing. New users hitting bad URLs get actionable errors instead of cryptic yt-dlp stderr.
+
+---
+
+## Session 7: DRY Refactor, LLM Retry, Job Retry (Phase 2)
+
+**Focus:** Resilience and reducing code duplication.
+
+**What happened:**
+- DRY refactoring of yt-dlp subprocess calls — consolidated duplicate patterns across fetcher, transcriber, and yt_dlp_util.
+- LLM retry with exponential backoff — transient Ollama/OpenAI failures no longer crash bulk operations.
+- `jobs retry <id>` command — re-launch failed background jobs, picking up from where they left off.
+
+**Result:** ~270 tests passing. Bulk operations survive transient failures gracefully.
+
+---
+
+## Session 8: Rate-Limit Monitoring, Status, --dry-run (Phase 3)
+
+**Focus:** Visibility and safety for bulk operations.
+
+**What happened:**
+- Rate-limit monitoring: new `request_log` table in SQLite tracks all yt-dlp requests. `rate_limit.py` module provides warnings at 200/hr and 400/hr thresholds. Auto-cleanup of logs older than 24 hours.
+- `status` command: single-command overview of artists, videos, transcripts, summaries, prompts, running jobs, and DB size.
+- `--dry-run` for bulk operations: shows what would happen (counts, time estimates) without performing any work. 14 tests covering transcribe and summarize dry-run paths.
+
+**Result:** 308 tests passing. Users can see exactly what they have and preview bulk operations before committing.
+
+**Design principle:** Rate-limit monitoring is passive by default — it warns but never blocks. Users in a hurry can acknowledge and continue.
+
+---
+
+## Session 9: Pipeline Parallelism (Phase 4)
+
+**Focus:** Eliminate the transcribe-then-summarize bottleneck.
+
+**What happened:**
+The human identified the single biggest performance problem from real-world usage: bulk summarize on @hubermanlab (459 videos) blocked Ollama for 10+ hours while YouTube transcripts trickled in. Transcribe is YouTube I/O-bound; summarize is LLM I/O-bound. These are independent bottlenecks.
+
+We built a producer-consumer pipeline:
+- New `pipeline.py` module: DB-polling coordination (not queue-based), concurrency budget splitting, daemon poller thread.
+- Transcribe workers feed transcripts into SQLite; summarize workers poll for new transcripts and process them concurrently.
+- Time to first summary drops from hours to ~15 seconds.
+- Pipeline only activates when bulk summarize discovers missing transcripts. Standalone transcribe and summarize commands unchanged.
+
+**Technical decision:** DB-polling over in-memory queue. Simpler, naturally idempotent, crash-recoverable. The poller checks every 5s with 0.5s wake-up increments for responsive termination.
+
+**Result:** 325 tests passing. 17 pipeline tests covering happy path, error isolation, progress tracking, termination, inter-delay, and CLI integration.
+
+---
+
 ## What We Built: By the Numbers
 
 | Metric | Value |
 |--------|-------|
-| Source files | 12 Python modules |
-| Source lines | 2,775 |
-| Test files | 20 test modules |
-| Test lines | 2,852 |
-| Total tests | 170 |
-| ADRs | 11 (0001-0011) |
-| New modules created | `jobs.py` (381 lines) |
-| Sessions | 5 |
-| Test growth | 81 → 99 → 109 → 138 → 170 |
+| Source files | 14 Python modules |
+| Source lines | ~3,900 |
+| Test files | 25 test modules |
+| Total tests | 325 |
+| ADRs | 12 (0001-0012) |
+| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py` |
+| Sessions | 9 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 |
 
 ---
 

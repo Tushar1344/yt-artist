@@ -254,6 +254,42 @@ yt-artist transcribe --artist-id @channel     # bulk transcribe with auth
 
 ---
 
+## Security considerations
+
+**Your data is stored locally in an unencrypted SQLite file.** This is by design — yt-artist is a personal tool, not a server — but you should be aware of what's stored and where.
+
+### What's in the database
+
+| Data | Where | Risk |
+|---|---|---|
+| Video URLs and titles | `yt_artist.db` → `videos` table | Low — public YouTube data |
+| Full transcript text | `yt_artist.db` → `transcripts` table | Medium — could contain sensitive spoken content |
+| AI-generated summaries | `yt_artist.db` → `summaries` table | Medium — may reflect sensitive content |
+| Prompt templates | `yt_artist.db` → `prompts` table | Low |
+
+If you're transcribing private, unlisted, or sensitive content (corporate training, private channels, etc.), treat the `.db` file as sensitive data.
+
+### Files to protect
+
+- **`*.db` files** — SQLite databases containing all transcripts and summaries in plaintext. Already excluded from git via `.gitignore`.
+- **`cookies.txt`** — If you use a cookies file for YouTube auth, it contains session tokens that could be used to access your Google account. Already excluded from git.
+- **`.env`** — If you store API keys here. Already excluded from git.
+
+### What yt-artist does NOT do
+
+- Does **not** encrypt the database. SQLite files are readable with any SQLite client.
+- Does **not** phone home or send data anywhere. All processing is local (unless you configure a remote LLM endpoint via `OPENAI_BASE_URL`).
+- Does **not** store your Google password. Cookie-based auth uses browser session tokens, not credentials.
+
+### Recommendations
+
+- **Don't commit `.db`, `cookies.txt`, or `.env` files** to version control. The `.gitignore` already covers these.
+- **Use a throwaway Google account** for cookie-based YouTube auth, not your primary account.
+- **Back up your database** if it contains hours of transcription work: `cp data/yt_artist.db data/yt_artist.db.backup`
+- **Use file permissions** if on a shared machine: `chmod 600 data/yt_artist.db`
+
+---
+
 ## Troubleshooting
 
 | Issue | What to do |

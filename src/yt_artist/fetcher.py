@@ -5,7 +5,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from yt_artist.storage import Storage
 from yt_artist.yt_dlp_util import yt_dlp_cmd as _yt_dlp_cmd
@@ -13,7 +13,7 @@ from yt_artist.yt_dlp_util import yt_dlp_cmd as _yt_dlp_cmd
 log = logging.getLogger("yt_artist.fetcher")
 
 
-def _run_yt_dlp_flat_playlist_json(channel_url: str) -> List[Dict[str, Any]]:
+def _run_yt_dlp_flat_playlist_json(channel_url: str, storage: Optional[Storage] = None) -> List[Dict[str, Any]]:
     """Run yt-dlp --flat-playlist -j and return list of parsed JSON entries (id, url, title)."""
     cmd = _yt_dlp_cmd() + [
         "--flat-playlist",
@@ -34,6 +34,13 @@ def _run_yt_dlp_flat_playlist_json(channel_url: str) -> List[Dict[str, Any]]:
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
         raise RuntimeError(f"yt-dlp failed (exit {e.returncode}) for {channel_url}: {stderr}") from e
+    # Log request for rate-limit monitoring
+    if storage is not None:
+        try:
+            from yt_artist.rate_limit import log_request
+            log_request(storage, "playlist")
+        except Exception:  # noqa: BLE001
+            pass  # best-effort
     entries: List[Dict[str, Any]] = []
     for line in result.stdout.strip().splitlines():
         line = line.strip()
@@ -76,7 +83,7 @@ def _channel_id_and_name_from_entries(
     return (base, "Channel")
 
 
-def _video_metadata(video_url: str) -> Dict[str, Any]:
+def _video_metadata(video_url: str, storage: Optional[Storage] = None) -> Dict[str, Any]:
     """Run yt-dlp -j on a single video URL; return parsed JSON (one object)."""
     cmd = _yt_dlp_cmd() + [
         "-j",
@@ -97,6 +104,13 @@ def _video_metadata(video_url: str) -> Dict[str, Any]:
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
         raise RuntimeError(f"yt-dlp failed (exit {e.returncode}) for {video_url}: {stderr}") from e
+    # Log request for rate-limit monitoring
+    if storage is not None:
+        try:
+            from yt_artist.rate_limit import log_request
+            log_request(storage, "metadata")
+        except Exception:  # noqa: BLE001
+            pass  # best-effort
     try:
         return json.loads(result.stdout.strip())
     except json.JSONDecodeError as e:
@@ -127,12 +141,12 @@ def _channel_info_from_video_metadata(meta: Dict[str, Any], video_url: str) -> T
     return (artist_id, channel, channel_url, video_id, title)
 
 
-def get_channel_info_for_video(video_url: str) -> Tuple[str, str, str, str, str]:
+def get_channel_info_for_video(video_url: str, storage: Optional[Storage] = None) -> Tuple[str, str, str, str, str]:
     """
     Get (artist_id, artist_name, channel_url, video_id, title) for a single video URL or id.
     Uses yt-dlp -j --no-playlist. Raises on failure.
     """
-    meta = _video_metadata(video_url)
+    meta = _video_metadata(video_url, storage=storage)
     return _channel_info_from_video_metadata(meta, video_url)
 
 
@@ -159,7 +173,7 @@ def ensure_artist_and_video_for_video_url(
     except ValueError:
         pass  # URL format not parseable client-side; fall through to yt-dlp
 
-    artist_id, artist_name, channel_url, video_id, title = get_channel_info_for_video(video_url)
+    artist_id, artist_name, channel_url, video_id, title = get_channel_info_for_video(video_url, storage=storage)
     artist = storage.get_artist(artist_id)
     video = storage.get_video(video_id)
     if artist and video:
@@ -196,7 +210,7 @@ def fetch_channel(
     Returns (urllist_path, video_count).
     """
     data_dir = Path(data_dir)
-    entries = _run_yt_dlp_flat_playlist_json(channel_url)
+    entries = _run_yt_dlp_flat_playlist_json(channel_url, storage=storage)
     if not entries:
         raise ValueError(f"No video entries returned for {channel_url}")
 

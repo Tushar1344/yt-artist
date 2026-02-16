@@ -388,6 +388,41 @@ class TestJobsCommand:
         assert any(c.args == (os.getpid(), 0) for c in calls), "Expected alive check with signal 0"
         assert any(c.args == (os.getpid(), _sig.SIGTERM) for c in calls), "Expected SIGTERM"
 
+    def test_jobs_retry_launches_new_job(self, tmp_path, capfd):
+        """'jobs retry' should create a new background job from a failed job's command."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_job(store, status="failed", pid=1, total=10, done=5, errors=5)
+
+        with patch("yt_artist.jobs.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = MagicMock(pid=12345)
+            code = _run_cli("jobs", "retry", "abc123de", db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "Retried" in captured.out
+        assert "Already-done items will be skipped" in captured.out
+        mock_popen.assert_called_once()
+
+    def test_jobs_retry_running_job_rejected(self, tmp_path, capfd):
+        """'jobs retry' should reject a still-running job."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_job(store, status="running", pid=os.getpid())
+
+        code = _run_cli("jobs", "retry", "abc123de", db_path=db)
+        assert isinstance(code, str) and "still running" in code
+
+    def test_jobs_retry_not_found(self, tmp_path, capfd):
+        """'jobs retry' with unknown job_id should error."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+
+        code = _run_cli("jobs", "retry", "nonexistent", db_path=db)
+        assert isinstance(code, str) and "not found" in code
+
     def test_jobs_clean(self, tmp_path, capfd):
         """'jobs clean' should remove old finished jobs."""
         db = tmp_path / "test.db"

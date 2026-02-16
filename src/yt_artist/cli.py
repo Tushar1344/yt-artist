@@ -23,7 +23,14 @@ from yt_artist.llm import check_connectivity as _check_llm
 from yt_artist.storage import Storage
 from yt_artist.summarizer import summarize
 from yt_artist.transcriber import transcribe, extract_video_id
-from yt_artist.yt_dlp_util import channel_url_for, MAX_CONCURRENCY, get_inter_video_delay, get_auth_config
+from yt_artist.yt_dlp_util import (
+    channel_url_for,
+    MAX_CONCURRENCY,
+    get_inter_video_delay,
+    get_auth_config,
+    validate_youtube_channel_url,
+    validate_youtube_video_url,
+)
 
 log = logging.getLogger("yt_artist.cli")
 
@@ -53,6 +60,17 @@ def _hint(*lines: str) -> None:
 def _report_dependency(message: str) -> None:
     """Log one short line when auto-creating dependencies."""
     log.info("Dependencies: %s", message)
+
+
+def _format_size(n_bytes: int) -> str:
+    """Human-readable file size (e.g. 12.4 MB)."""
+    if n_bytes < 1024:
+        return f"{n_bytes} B"
+    for unit in ("KB", "MB", "GB"):
+        n_bytes /= 1024
+        if n_bytes < 1024 or unit == "GB":
+            return f"{n_bytes:.1f} {unit}"
+    return f"{n_bytes:.1f} GB"  # unreachable but defensive
 
 
 class _ProgressCounter:
@@ -116,6 +134,38 @@ class _ProgressCounter:
     def done(self) -> int:
         with self._lock:
             return self._done
+
+
+def _run_bulk(
+    items: list,
+    worker_fn,
+    *,
+    label: str,
+    concurrency: int = 1,
+    inter_delay: float = 0.0,
+) -> _ProgressCounter:
+    """Run *worker_fn* over *items* with ThreadPool, progress tracking, and delay.
+
+    *worker_fn(item)* must return a tuple whose last element is ``error_or_None``.
+    Returns the _ProgressCounter so the caller can inspect done/errors.
+    """
+    progress = _ProgressCounter(len(items), job_id=_bg_job_id, job_storage=_bg_storage)
+    if concurrency > 1:
+        log.info("Bulk %s: %d items with %d workers (%.1fs inter-item delay).",
+                 label, len(items), concurrency, inter_delay)
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures: dict = {}
+        for i, item in enumerate(items):
+            futures[pool.submit(worker_fn, item)] = item
+            if inter_delay > 0 and i < len(items) - 1:
+                time.sleep(inter_delay)
+        for fut in as_completed(futures):
+            result = fut.result()
+            # Last element of result tuple is error_or_None
+            vid = result[0]
+            err = result[-1]
+            progress.tick(label, vid, error=err)
+    return progress
 
 
 def _resolve_prompt_id(storage: Storage, artist_id: str | None, prompt_override: str | None) -> str:
@@ -201,6 +251,13 @@ def main() -> None:
         default=False,
         dest="background",
         help="Run bulk operations in the background. Use 'yt-artist jobs' to check progress.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        dest="dry_run",
+        help="Show what would happen without doing it (transcribe/summarize bulk).",
     )
     parser.add_argument(
         "--_bg-worker",
@@ -291,6 +348,9 @@ def main() -> None:
     p_jobs_stop = p_jobs_sub.add_parser("stop", help="Stop a running background job")
     p_jobs_stop.add_argument("job_id", help="Job ID (or prefix)")
     p_jobs_stop.set_defaults(func=_cmd_jobs, jobs_action="stop")
+    p_jobs_retry = p_jobs_sub.add_parser("retry", help="Re-run a failed/completed job (only processes remaining items)")
+    p_jobs_retry.add_argument("job_id", help="Job ID (or prefix)")
+    p_jobs_retry.set_defaults(func=_cmd_jobs, jobs_action="retry")
     p_jobs_clean = p_jobs_sub.add_parser("clean", help="Remove finished jobs older than 7 days")
     p_jobs_clean.set_defaults(func=_cmd_jobs, jobs_action="clean")
 
@@ -300,6 +360,13 @@ def main() -> None:
         help="Check your setup: yt-dlp, YouTube auth, PO token, LLM endpoint",
     )
     p_doctor.set_defaults(func=_cmd_doctor)
+
+    # status: project overview
+    p_status = subparsers.add_parser(
+        "status",
+        help="Show project status: artists, videos, transcripts, jobs, DB size",
+    )
+    p_status.set_defaults(func=_cmd_status)
 
     args = parser.parse_args()
 
@@ -356,7 +423,7 @@ def main() -> None:
         _signal.signal(_signal.SIGTERM, _bg_sigterm_handler)
 
     # First-run hint: suggest doctor + quickstart if DB is empty.
-    if not _quiet and args.command not in ("quickstart", "doctor", "jobs"):
+    if not _quiet and args.command not in ("quickstart", "doctor", "jobs", "status"):
         if not storage.list_artists():
             sys.stderr.write(
                 "\n  \U0001f4a1 First time? Check your setup and get started:\n"
@@ -389,6 +456,7 @@ def main() -> None:
 
 def _cmd_fetch_channel(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
     """Bulk urllist for channel; writes markdown and upserts artists/videos. No dependency fill."""
+    args.channel_url = validate_youtube_channel_url(args.channel_url)
     path, count = fetch_channel(args.channel_url, storage, data_dir=data_dir)
     print(f"Urllist: {path}")
     print(f"Videos:  {count}")
@@ -438,6 +506,13 @@ def _cmd_transcribe(args: argparse.Namespace, storage: Storage, data_dir: Path) 
         url_base = "https://www.youtube.com/watch?v="
         concurrency = getattr(args, "concurrency", 1) or 1
 
+        if getattr(args, "dry_run", False):
+            from yt_artist.jobs import estimate_time, format_estimate
+            est = estimate_time(len(to_do), "transcribe", concurrency)
+            already = len(videos) - len(to_do)
+            print(f"Would transcribe {len(to_do)} videos ({already} already done). Estimated: ~{format_estimate(est)}")
+            return
+
         def _transcribe_one(v: dict) -> tuple[str, str | None]:
             """Worker: transcribe a single video. Returns (video_id, error_or_None)."""
             try:
@@ -466,25 +541,20 @@ def _cmd_transcribe(args: argparse.Namespace, storage: Storage, data_dir: Path) 
             from yt_artist.jobs import maybe_suggest_background
             maybe_suggest_background(len(to_do), "transcribe", concurrency, sys.argv, quiet=_quiet)
 
-        progress = _ProgressCounter(len(to_do), job_id=_bg_job_id, job_storage=_bg_storage)
+        # Rate-limit warning before starting bulk work
+        from yt_artist.rate_limit import check_rate_warning
+        check_rate_warning(storage, quiet=_quiet)
+
         inter_delay = get_inter_video_delay()
-        if concurrency > 1:
-            log.info("Bulk transcribe: %d videos with %d workers (%.1fs inter-video delay).", len(to_do), concurrency, inter_delay)
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures: dict = {}
-            for i, v in enumerate(to_do):
-                futures[pool.submit(_transcribe_one, v)] = v
-                # Stagger submissions to avoid burst of concurrent yt-dlp requests.
-                if inter_delay > 0 and i < len(to_do) - 1:
-                    time.sleep(inter_delay)
-            for fut in as_completed(futures):
-                vid, err = fut.result()
-                progress.tick("Transcribing", vid, error=err)
+        progress = _run_bulk(
+            to_do, _transcribe_one,
+            label="Transcribing", concurrency=concurrency, inter_delay=inter_delay,
+        )
         total = time.monotonic() - progress.t0
         err_msg = f" ({progress.errors} errors)" if progress.errors else ""
         print(f"Transcribed: {progress.done} videos in {total:.0f}s.{err_msg}")
         progress.finalize(
-            status="completed" if progress.errors == 0 else "completed",
+            status="completed",
             error_message=f"{progress.errors} errors" if progress.errors else None,
         )
         _hint(
@@ -493,6 +563,10 @@ def _cmd_transcribe(args: argparse.Namespace, storage: Storage, data_dir: Path) 
         )
         return
 
+    video_url_or_id = validate_youtube_video_url(video_url_or_id)
+    if getattr(args, "dry_run", False):
+        print(f"Would transcribe 1 video: {video_url_or_id}")
+        return
     artist_id = None
     if args.write_file:
         vid = extract_video_id(video_url_or_id)
@@ -542,28 +616,6 @@ def _cmd_summarize(args: argparse.Namespace, storage: Storage, data_dir: Path) -
         all_ids = [v["id"] for v in videos]
         have_transcripts = storage.video_ids_with_transcripts(all_ids)
         missing = [vid for vid in all_ids if vid not in have_transcripts]
-        if missing:
-            _report_dependency(f"{len(missing)} videos had no transcript → transcribing.")
-            url_base = "https://www.youtube.com/watch?v="
-
-            def _transcribe_missing(vid: str) -> tuple[str, str | None]:
-                try:
-                    transcribe(url_base + vid, storage, artist_id=artist_id_arg, write_transcript_file=False, data_dir=data_dir)
-                    return (vid, None)
-                except Exception as exc:  # noqa: BLE001
-                    return (vid, str(exc))
-
-            progress_t = _ProgressCounter(len(missing), job_id=_bg_job_id, job_storage=_bg_storage)
-            inter_delay = get_inter_video_delay()
-            with ThreadPoolExecutor(max_workers=concurrency) as pool:
-                futs: dict = {}
-                for i, vid in enumerate(missing):
-                    futs[pool.submit(_transcribe_missing, vid)] = vid
-                    if inter_delay > 0 and i < len(missing) - 1:
-                        time.sleep(inter_delay)
-                for fut in as_completed(futs):
-                    vid, err = fut.result()
-                    progress_t.tick("Transcribing", vid, error=err)
 
         # Batch DB check: one query for summary existence instead of N get_summaries_for_video.
         already_summarized = storage.video_ids_with_summary(all_ids, prompt_id)
@@ -579,45 +631,130 @@ def _cmd_summarize(args: argparse.Namespace, storage: Storage, data_dir: Path) -
             )
             return
 
+        if getattr(args, "dry_run", False):
+            from yt_artist.jobs import estimate_time, format_estimate
+            if missing:
+                print(f"Would transcribe {len(missing)} videos (missing transcripts).")
+            est = estimate_time(len(to_summarize), "summarize", concurrency)
+            already = len(videos) - len(to_summarize)
+            print(f"Would summarize {len(to_summarize)} videos ({already} already done). Estimated: ~{format_estimate(est)}")
+            return
+
         # Suggest --bg for large batches (foreground only)
         if not _bg_job_id:
             total_work = len(missing) + len(to_summarize)
             from yt_artist.jobs import maybe_suggest_background
             maybe_suggest_background(total_work, "summarize", concurrency, sys.argv, quiet=_quiet)
 
-        def _summarize_one(v: dict) -> tuple[str, str, str | None]:
-            """Worker: summarize one video. Returns (video_id, summary_id_or_empty, error_or_None)."""
-            try:
-                sid = summarize(v["id"], prompt_id, storage, intent_override=args.intent, audience_override=args.audience)
-                return (v["id"], sid, None)
-            except Exception as exc:  # noqa: BLE001
-                return (v["id"], "", str(exc))
+        # Rate-limit warning before starting bulk work
+        from yt_artist.rate_limit import check_rate_warning
+        check_rate_warning(storage, quiet=_quiet)
 
-        if concurrency > 1:
-            log.info("Bulk summarize: %d videos with %d workers.", len(to_summarize), concurrency)
-        progress_s = _ProgressCounter(len(to_summarize), job_id=_bg_job_id, job_storage=_bg_storage)
-        done = 0
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {pool.submit(_summarize_one, v): v for v in to_summarize}
-            for fut in as_completed(futures):
-                vid, summary_id, err = fut.result()
-                progress_s.tick("Summarizing", vid, error=err)
-                if not err:
-                    done += 1
-                    rows = storage.get_summaries_for_video(vid)
-                    content = next((r["content"] for r in rows if r["prompt_id"] == prompt_id), "")
+        url_base = "https://www.youtube.com/watch?v="
+
+        def _transcribe_vid(vid: str) -> tuple[str, str | None]:
+            """Worker: transcribe a single video by ID."""
+            try:
+                transcribe(url_base + vid, storage, artist_id=artist_id_arg, write_transcript_file=False, data_dir=data_dir)
+                return (vid, None)
+            except Exception as exc:  # noqa: BLE001
+                return (vid, str(exc))
+
+        def _summarize_vid(vid: str) -> tuple[str, str, str | None]:
+            """Worker: summarize a single video by ID."""
+            try:
+                sid = summarize(vid, prompt_id, storage, intent_override=args.intent, audience_override=args.audience)
+                return (vid, sid, None)
+            except Exception as exc:  # noqa: BLE001
+                return (vid, "", str(exc))
+
+        if missing:
+            # Pipeline mode: transcribe + summarize concurrently (ADR-0012).
+            _report_dependency(f"{len(missing)} videos had no transcript → pipeline mode.")
+            immediate_summarize = [vid for vid in all_ids
+                                   if vid in have_transcripts and vid not in already_summarized]
+
+            def _poll() -> list[str]:
+                have_t = storage.video_ids_with_transcripts(all_ids)
+                have_s = storage.video_ids_with_summary(all_ids, prompt_id)
+                return [vid for vid in all_ids if vid in have_t and vid not in have_s]
+
+            from yt_artist.pipeline import run_pipeline, _split_concurrency
+            t_workers, s_workers = _split_concurrency(concurrency)
+            inter_delay = get_inter_video_delay()
+            total_to_summarize = len(to_summarize)
+
+            t_progress = _ProgressCounter(len(missing))
+            s_progress = _ProgressCounter(total_to_summarize, job_id=_bg_job_id, job_storage=_bg_storage)
+
+            pipe_result = run_pipeline(
+                video_ids_to_transcribe=missing,
+                video_ids_to_summarize=immediate_summarize,
+                transcribe_fn=_transcribe_vid,
+                summarize_fn=_summarize_vid,
+                poll_fn=_poll,
+                transcribe_workers=t_workers,
+                summarize_workers=s_workers,
+                inter_delay=inter_delay,
+                transcribe_progress=t_progress,
+                summarize_progress=s_progress,
+            )
+            # Print summary previews for completed items
+            for v in to_summarize:
+                rows = storage.get_summaries_for_video(v["id"])
+                content = next((r["content"] for r in rows if r["prompt_id"] == prompt_id), "")
+                if content:
+                    summary_id = f"{v['id']}:{prompt_id}"
                     if args.max_preview > 0 and len(content) > args.max_preview:
                         preview = content[: args.max_preview] + "…"
                     else:
                         preview = content
                     print(f"Summary {summary_id}: {preview}")
-        total_sum = time.monotonic() - progress_s.t0
-        err_msg = f", {progress_s.errors} errors" if progress_s.errors else ""
-        print(f"Summarized {done} new, {skipped} already done ({total_sum:.0f}s{err_msg}).")
-        progress_s.finalize(
-            status="completed" if progress_s.errors == 0 else "completed",
-            error_message=f"{progress_s.errors} errors" if progress_s.errors else None,
-        )
+            t_err = f", {pipe_result.transcribe_errors} transcribe errors" if pipe_result.transcribe_errors else ""
+            s_err = f", {pipe_result.summarize_errors} summarize errors" if pipe_result.summarize_errors else ""
+            print(
+                f"Pipeline: transcribed {pipe_result.transcribed}, "
+                f"summarized {pipe_result.summarized} new, "
+                f"{skipped} already done ({pipe_result.elapsed:.0f}s{t_err}{s_err})."
+            )
+            s_progress.finalize(
+                status="completed",
+                error_message=f"{pipe_result.transcribe_errors + pipe_result.summarize_errors} errors"
+                if (pipe_result.transcribe_errors + pipe_result.summarize_errors) else None,
+            )
+        else:
+            # Sequential mode: all transcripts exist, just summarize.
+            def _summarize_one(v: dict) -> tuple[str, str, str | None]:
+                """Worker: summarize one video. Returns (video_id, summary_id_or_empty, error_or_None)."""
+                try:
+                    sid = summarize(v["id"], prompt_id, storage, intent_override=args.intent, audience_override=args.audience)
+                    return (v["id"], sid, None)
+                except Exception as exc:  # noqa: BLE001
+                    return (v["id"], "", str(exc))
+
+            progress_s = _run_bulk(
+                to_summarize, _summarize_one,
+                label="Summarizing", concurrency=concurrency,
+            )
+            # Print summaries for completed items
+            done = progress_s.done - progress_s.errors
+            for v in to_summarize:
+                rows = storage.get_summaries_for_video(v["id"])
+                content = next((r["content"] for r in rows if r["prompt_id"] == prompt_id), "")
+                if content:
+                    summary_id = f"{v['id']}:{prompt_id}"
+                    if args.max_preview > 0 and len(content) > args.max_preview:
+                        preview = content[: args.max_preview] + "…"
+                    else:
+                        preview = content
+                    print(f"Summary {summary_id}: {preview}")
+            total_sum = time.monotonic() - progress_s.t0
+            err_msg = f", {progress_s.errors} errors" if progress_s.errors else ""
+            print(f"Summarized {done} new, {skipped} already done ({total_sum:.0f}s{err_msg}).")
+            progress_s.finalize(
+                status="completed",
+                error_message=f"{progress_s.errors} errors" if progress_s.errors else None,
+            )
         _hint(
             "\U0001f4a1 Done! Browse your transcripts and summaries:",
             f"   yt-artist search-transcripts --artist-id {artist_id_arg}",
@@ -628,6 +765,10 @@ def _cmd_summarize(args: argparse.Namespace, storage: Storage, data_dir: Path) -
         return
 
     # Per-video: resolve video_id, ensure artist+video, ensure transcript, resolve prompt, summarize
+    video_spec = validate_youtube_video_url(video_spec)
+    if getattr(args, "dry_run", False):
+        print(f"Would summarize 1 video: {video_spec}")
+        return
     try:
         video_id = extract_video_id(video_spec)
     except ValueError:
@@ -999,6 +1140,62 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
         print("  Fix warnings/failures above, then re-run: yt-artist doctor")
 
 
+def _cmd_status(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
+    """Show project status: artists, videos, transcripts, summaries, jobs, DB size."""
+    from yt_artist.jobs import list_jobs
+    from yt_artist.rate_limit import get_rate_status
+
+    # Artists
+    n_artists = storage.count_artists()
+    if n_artists > 0:
+        artists = storage.list_artists()
+        names = [a["id"] for a in artists]
+        if len(names) > 5:
+            artist_str = ", ".join(names[:5]) + ", \u2026"
+        else:
+            artist_str = ", ".join(names)
+        print(f"Artists:        {n_artists} ({artist_str})")
+    else:
+        print("Artists:        0")
+
+    # Videos
+    n_videos = storage.count_videos()
+    n_transcribed = storage.count_transcribed_videos()
+    n_summarized = storage.count_summarized_videos()
+    print(f"Videos:         {n_videos} ({n_transcribed} transcribed, {n_summarized} summarized)")
+
+    # Prompts
+    n_prompts = storage.count_prompts()
+    print(f"Prompts:        {n_prompts}")
+
+    # Running jobs
+    running = list_jobs(storage, status_filter="running")
+    if running:
+        job_descs = []
+        for j in running[:3]:
+            total = j.get("total", 0) or 0
+            done = j.get("done", 0) or 0
+            cmd = (j.get("command") or "")[:30]
+            progress = f"{done}/{total}" if total > 0 else "starting"
+            job_descs.append(f"{cmd}: {progress}")
+        print(f"Running jobs:   {len(running)} ({'; '.join(job_descs)})")
+    else:
+        print("Running jobs:   0")
+
+    # YouTube request rate
+    rate = get_rate_status(storage)
+    print(f"YouTube reqs:   {rate['count_1h']} in last hour, {rate['count_24h']} in last 24h")
+    if rate["warning"]:
+        print(f"  \u26a0\ufe0f  {rate['warning']}")
+
+    # DB size
+    try:
+        size = storage.db_path.stat().st_size
+        print(f"DB size:        {_format_size(size)}")
+    except OSError:
+        print("DB size:        unknown")
+
+
 def _cmd_jobs(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
     """Handle jobs subcommands: list, attach, stop, clean."""
     from yt_artist.jobs import list_jobs, attach_job, stop_job, cleanup_old_jobs
@@ -1026,6 +1223,18 @@ def _cmd_jobs(args: argparse.Namespace, storage: Storage, data_dir: Path) -> Non
 
     elif action == "stop":
         stop_job(storage, args.job_id)
+
+    elif action == "retry":
+        from yt_artist.jobs import get_job, retry_job
+        job = get_job(storage, args.job_id)
+        if not job:
+            raise SystemExit(f"Job {args.job_id} not found.")
+        if job["status"] == "running":
+            raise SystemExit(f"Job {job['id'][:8]} is still running. Stop it first or wait for it to finish.")
+        new_id = retry_job(job, storage, data_dir)
+        print(f"Retried job {job['id'][:8]} → new job {new_id[:8]}")
+        print(f"Already-done items will be skipped automatically.")
+        print(f"Attach: yt-artist jobs attach {new_id[:8]}")
 
     elif action == "clean":
         removed = cleanup_old_jobs(storage)

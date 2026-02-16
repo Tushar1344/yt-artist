@@ -39,6 +39,8 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Upsert pattern everywhere: INSERT ON CONFLICT DO UPDATE
 - Background jobs: re-exec as subprocess with --_bg-worker flag
 - Concurrency via ThreadPoolExecutor, capped at MAX_CONCURRENCY=3
+- Pipeline parallelism: producer-consumer with DB-polling in pipeline.py (ADR-0012)
+- Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 
 ## Conventions
@@ -54,7 +56,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 
 ## DB Schema (tables)
 
-artists, videos, transcripts, prompts, summaries, jobs, screenshots (future), video_stats (future)
+artists, videos, transcripts, prompts, summaries, jobs, request_log, screenshots (future), video_stats (future)
 
 ## Environment Variables
 

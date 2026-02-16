@@ -355,6 +355,49 @@ def stop_job(storage: Storage, job_id: str) -> None:
     finalize_job(storage, job["id"], status="stopped")
 
 
+def retry_job(job: Dict[str, Any], storage: Storage, data_dir: Path) -> str:
+    """Re-launch a finished job's command as a new background job.
+
+    The new job runs the same CLI command.  Because bulk operations use
+    "resume by exclusion" (they skip already-done items), re-running
+    naturally processes only the remaining/failed items.
+
+    Returns the new job ID.
+    """
+    command_str = job.get("command") or ""
+    if not command_str:
+        raise SystemExit(f"Job {job['id'][:8]} has no command to retry.")
+
+    import shlex
+    argv_tail = shlex.split(command_str)
+    # Build a full argv as if the user typed it
+    full_argv = [sys.executable, "-m", "yt_artist.cli"] + argv_tail
+
+    job_id = _generate_job_id()
+    log_dir = jobs_dir(data_dir)
+    log_path = log_dir / f"{job_id}.log"
+
+    display_cmd = command_str
+    _create_job_record(storage, job_id, f"retry({job['id'][:8]}): {display_cmd}", log_path)
+
+    child_argv = full_argv + ["--_bg-worker", job_id]
+    # Carry over --db flag if original job used one
+    if "--db" not in command_str:
+        db_path = str(storage.db_path)
+        child_argv = [child_argv[0], child_argv[1], child_argv[2], "--db", db_path] + child_argv[3:]
+
+    log_fh = open(log_path, "w")  # noqa: SIM115
+    proc = subprocess.Popen(
+        child_argv,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+    _update_job_pid(storage, job_id, proc.pid)
+    return job_id
+
+
 def cleanup_old_jobs(storage: Storage, max_age_days: int = 7) -> int:
     """Remove finished jobs (+ log files) older than max_age_days.  Returns count removed."""
     conn = storage._conn()

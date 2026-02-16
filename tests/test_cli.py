@@ -438,3 +438,166 @@ class TestDoctor:
         assert code == 0
         captured = capfd.readouterr()
         assert "checks passed" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# CLI: URL validation integration (Phase 1)
+# ---------------------------------------------------------------------------
+
+class TestFetchChannelValidation:
+    """fetch-channel rejects bad URLs before hitting yt-dlp."""
+
+    def test_video_url_rejected(self, tmp_path):
+        """Video URL passed to fetch-channel exits with helpful message."""
+        db = tmp_path / "test.db"
+        code = _run_cli(
+            "fetch-channel",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            db_path=db,
+        )
+        # SystemExit with string message → code is the message string
+        assert isinstance(code, str) and "looks like a video URL" in code
+
+    def test_non_youtube_url_rejected(self, tmp_path):
+        """Non-YouTube URL is rejected."""
+        db = tmp_path / "test.db"
+        code = _run_cli(
+            "fetch-channel",
+            "https://www.example.com/@channel",
+            db_path=db,
+        )
+        assert isinstance(code, str) and "Not a YouTube URL" in code
+
+    def test_bare_handle_accepted(self, tmp_path):
+        """Bare @handle is expanded and accepted (mocking fetch_channel)."""
+        db = tmp_path / "test.db"
+        fake_return = ("data/artists/@test/urllist.md", 3)
+        with patch("yt_artist.cli.fetch_channel", return_value=fake_return):
+            code = _run_cli("fetch-channel", "@testchannel", db_path=db)
+        assert code == 0
+
+    def test_empty_url_rejected(self, tmp_path):
+        """Empty string is rejected."""
+        db = tmp_path / "test.db"
+        code = _run_cli("fetch-channel", "", db_path=db)
+        assert isinstance(code, str) and "empty" in code.lower()
+
+    def test_random_string_rejected(self, tmp_path):
+        """Random non-URL, non-handle string is rejected."""
+        db = tmp_path / "test.db"
+        code = _run_cli("fetch-channel", "not-a-url", db_path=db)
+        assert isinstance(code, str) and "Not a valid URL" in code
+
+    def test_shorts_url_rejected(self, tmp_path):
+        """YouTube Shorts URL rejected from fetch-channel."""
+        db = tmp_path / "test.db"
+        code = _run_cli(
+            "fetch-channel",
+            "https://www.youtube.com/shorts/abc123xyz",
+            db_path=db,
+        )
+        assert isinstance(code, str) and "looks like a video URL" in code
+
+
+class TestTranscribeValidation:
+    """transcribe rejects bad URLs before hitting yt-dlp."""
+
+    def test_channel_url_rejected(self, tmp_path):
+        """Channel URL passed to transcribe exits with helpful message."""
+        db = tmp_path / "test.db"
+        code = _run_cli(
+            "transcribe",
+            "https://www.youtube.com/@hubermanlab",
+            db_path=db,
+        )
+        assert isinstance(code, str) and "looks like a channel URL" in code
+
+    def test_non_youtube_url_rejected(self, tmp_path):
+        """Non-YouTube URL is rejected."""
+        db = tmp_path / "test.db"
+        code = _run_cli(
+            "transcribe",
+            "https://www.example.com/watch?v=abc123xyz01",
+            db_path=db,
+        )
+        assert isinstance(code, str) and "Not a YouTube URL" in code
+
+    def test_empty_string_rejected(self, tmp_path):
+        """Empty video URL/ID is rejected (caught by arg check before validation)."""
+        db = tmp_path / "test.db"
+        code = _run_cli("transcribe", "", db_path=db)
+        # Empty string → "Provide video_url" check fires before validation
+        assert isinstance(code, str) and "Provide" in code
+
+    def test_short_bare_string_rejected(self, tmp_path):
+        """Short garbage string is rejected as invalid video URL/ID."""
+        db = tmp_path / "test.db"
+        code = _run_cli("transcribe", "foo", db_path=db)
+        assert isinstance(code, str) and "Not a valid video URL or ID" in code
+
+    def test_valid_video_url_passes_validation(self, tmp_path):
+        """Valid video URL passes validation (mocking transcribe)."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+
+        with patch("yt_artist.cli.transcribe", return_value="testvid00001"):
+            code = _run_cli(
+                "transcribe",
+                "https://www.youtube.com/watch?v=testvid00001",
+                db_path=db,
+            )
+        assert code == 0
+
+    def test_bare_video_id_passes_validation(self, tmp_path):
+        """Bare 11-char video ID passes validation (mocking transcribe)."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+
+        with patch("yt_artist.cli.transcribe", return_value="testvid00001"):
+            code = _run_cli("transcribe", "testvid00001", db_path=db)
+        assert code == 0
+
+
+class TestSummarizeValidation:
+    """summarize rejects bad URLs before hitting LLM."""
+
+    def test_channel_url_rejected(self, tmp_path):
+        """Channel URL passed to summarize exits with helpful message."""
+        db = tmp_path / "test.db"
+        with patch("yt_artist.cli._check_llm"):
+            code = _run_cli(
+                "summarize",
+                "https://www.youtube.com/@hubermanlab",
+                db_path=db,
+            )
+        assert isinstance(code, str) and "looks like a channel URL" in code
+
+    def test_non_youtube_url_rejected(self, tmp_path):
+        """Non-YouTube URL is rejected."""
+        db = tmp_path / "test.db"
+        with patch("yt_artist.cli._check_llm"):
+            code = _run_cli(
+                "summarize",
+                "https://www.example.com/watch?v=abc123xyz01",
+                db_path=db,
+            )
+        assert isinstance(code, str) and "Not a YouTube URL" in code
+
+    def test_short_garbage_rejected(self, tmp_path):
+        """Short garbage string is rejected."""
+        db = tmp_path / "test.db"
+        with patch("yt_artist.cli._check_llm"):
+            code = _run_cli("summarize", "foo", db_path=db)
+        assert isinstance(code, str) and "Not a valid video URL or ID" in code
+
+    def test_empty_string_rejected(self, tmp_path):
+        """Empty video spec is rejected (caught by arg check before validation)."""
+        db = tmp_path / "test.db"
+        with patch("yt_artist.cli._check_llm"):
+            code = _run_cli("summarize", "", db_path=db)
+        # Empty string → "Provide video (URL or id) or --artist-id" fires first
+        assert isinstance(code, str) and "Provide" in code

@@ -10,6 +10,7 @@ from yt_artist.transcriber import (
     extract_video_id,
     _subs_to_plain_text,
     _classify_yt_dlp_error,
+    _run_yt_dlp_with_backoff,
     _run_yt_dlp_subtitles,
     transcribe,
 )
@@ -177,6 +178,81 @@ class TestClassifyYtDlpError:
 # ---------------------------------------------------------------------------
 # _run_yt_dlp_subtitles provider-aware error message tests
 # ---------------------------------------------------------------------------
+
+class TestRunYtDlpWithBackoff:
+    """Tests for the extracted _run_yt_dlp_with_backoff helper."""
+
+    def test_success_returns_stdout_stderr(self, tmp_path):
+        """Successful run returns (stdout, stderr, False)."""
+        mock_result = type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+        with patch("subprocess.run", return_value=mock_result):
+            stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
+                ["echo"], "https://youtube.com/watch?v=x", tmp_path, "test",
+            )
+        assert stdout == "ok"
+        assert not timed_out
+
+    def test_timeout_returns_timed_out_flag(self, tmp_path):
+        """Timeout sets timed_out=True instead of raising."""
+        with patch("subprocess.run", side_effect=TimeoutError("timed out")):
+            # subprocess.TimeoutExpired inherits from SubprocessError, let's use it properly
+            import subprocess as _sp
+            with patch("subprocess.run", side_effect=_sp.TimeoutExpired(["cmd"], 120)):
+                stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
+                    ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                )
+        assert timed_out is True
+        assert stdout == ""
+
+    def test_429_retries_then_raises(self, tmp_path):
+        """429 exhausts retries and raises FileNotFoundError."""
+        mock_result = type("R", (), {
+            "returncode": 1, "stdout": "", "stderr": "HTTP Error 429: Too Many Requests",
+        })()
+        with patch("subprocess.run", return_value=mock_result), \
+             patch("yt_artist.transcriber._time.sleep"):
+            with pytest.raises(FileNotFoundError, match="429"):
+                _run_yt_dlp_with_backoff(
+                    ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                )
+
+    def test_auth_error_raises_immediately(self, tmp_path):
+        """Auth/bot error raises on first attempt without retrying."""
+        mock_result = type("R", (), {
+            "returncode": 1, "stdout": "", "stderr": "Sign in to confirm your age",
+        })()
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            with pytest.raises(FileNotFoundError, match="age-restricted"):
+                _run_yt_dlp_with_backoff(
+                    ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                )
+        # Should only call subprocess once (no retries for auth errors)
+        assert mock_run.call_count == 1
+
+    def test_429_backoff_increases(self, tmp_path):
+        """Backoff doubles between 429 retries."""
+        call_count = 0
+        def _mock_run(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 3:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": "429"})()
+            return type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+        sleep_times = []
+        with patch("subprocess.run", side_effect=_mock_run), \
+             patch("yt_artist.transcriber._time.sleep", side_effect=lambda s: sleep_times.append(s)):
+            stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
+                ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+            )
+        assert stdout == "ok"
+        assert not timed_out
+        # Should have slept 3 times with increasing backoff: 5, 10, 20
+        assert len(sleep_times) == 3
+        assert sleep_times[0] == 5
+        assert sleep_times[1] == 10
+        assert sleep_times[2] == 20
+
 
 class TestRunYtDlpSubtitlesProviderHints:
     """Test that no-subtitle errors include provider-aware hints."""

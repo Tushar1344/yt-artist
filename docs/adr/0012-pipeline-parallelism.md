@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-02-10).
+Accepted (2026-02-16). Implemented in Phase 4.
 
 ## Context
 

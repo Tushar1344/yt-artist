@@ -130,6 +130,8 @@ class Storage:
             conn.commit()
             self._migrate_jobs_table(conn)
             conn.commit()
+            self._migrate_request_log_table(conn)
+            conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
         finally:
@@ -177,6 +179,19 @@ class Storage:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+
+    def _migrate_request_log_table(self, conn: sqlite3.Connection) -> None:
+        """Create request_log table if missing (existing DBs created before rate-limit monitoring)."""
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'")
+        if not cur.fetchone():
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS request_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                    request_type TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp)")
 
     # ------ Artists ------
 
@@ -487,6 +502,58 @@ class Storage:
                 [prompt_id] + video_ids,
             )
             return {row["video_id"] if isinstance(row, dict) else row[0] for row in cur.fetchall()}
+        finally:
+            conn.close()
+
+    # ------ Counts (for status command) ------
+
+    def count_artists(self) -> int:
+        """Return total number of artists."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS cnt FROM artists")
+            row = cur.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+        finally:
+            conn.close()
+
+    def count_videos(self) -> int:
+        """Return total number of videos."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS cnt FROM videos")
+            row = cur.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+        finally:
+            conn.close()
+
+    def count_transcribed_videos(self) -> int:
+        """Return number of videos that have transcripts."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS cnt FROM transcripts")
+            row = cur.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+        finally:
+            conn.close()
+
+    def count_summarized_videos(self) -> int:
+        """Return number of distinct videos that have at least one summary."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT COUNT(DISTINCT video_id) AS cnt FROM summaries")
+            row = cur.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+        finally:
+            conn.close()
+
+    def count_prompts(self) -> int:
+        """Return total number of prompts."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS cnt FROM prompts")
+            row = cur.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
         finally:
             conn.close()
 

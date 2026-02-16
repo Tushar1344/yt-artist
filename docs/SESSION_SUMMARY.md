@@ -1,6 +1,6 @@
 # yt-artist Development Session Summary
 
-*Comprehensive summary of all 5 development sessions.*
+*Comprehensive summary of all 9 development sessions.*
 
 ---
 
@@ -154,39 +154,151 @@ Added `_migrate_jobs_table()` to `storage.py`.
 
 ---
 
+## Session 6: URL Validation & Security Docs — Phase 1 (~225 tests)
+
+**Goal:** Safe-fail on bad YouTube URLs; security transparency.
+
+**Changes to `yt_dlp_util.py` and `fetcher.py`:**
+- YouTube URL validation before yt-dlp calls
+- Detection of private/deleted videos from yt-dlp exit codes
+- Age-restricted video detection with cookie suggestions
+
+**Changes to `USER_GUIDE.md`:**
+- Security considerations section: unencrypted DB, cookie sensitivity
+
+**New test module:** test_url_validation (18 tests)
+- TestChannelUrlHappy (9), TestChannelUrlErrors (6)
+- TestVideoUrlHappy (7), TestVideoUrlErrors (7)
+
+---
+
+## Session 7: DRY Refactor, LLM Retry, Job Retry — Phase 2 (~270 tests)
+
+**Goal:** Resilience and code deduplication.
+
+**Changes to `llm.py`:**
+- Retry with exponential backoff for transient LLM failures
+
+**Changes to `jobs.py` and `cli.py`:**
+- `jobs retry <id>` command — re-launch failed jobs
+
+**Changes to `transcriber.py`, `fetcher.py`, `yt_dlp_util.py`:**
+- DRY refactoring of yt-dlp subprocess calls
+
+**Updated tests:** test_llm_connectivity, test_background_jobs, test_cli, test_transcriber
+
+---
+
+## Session 8: Rate-Limit Monitoring, Status, --dry-run — Phase 3 (308 tests)
+
+**Goal:** Visibility and safety for bulk operations.
+
+### Schema
+
+Added to `schema.sql`:
+```sql
+CREATE TABLE IF NOT EXISTS request_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    request_type TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);
+```
+
+### New module: `rate_limit.py` (85 lines)
+
+| Function | Purpose |
+|----------|---------|
+| `log_request(storage, request_type)` | Log yt-dlp request + auto-cleanup |
+| `count_requests(storage, hours)` | Count requests in time window |
+| `get_rate_status(storage)` | Dict with count_1h, count_24h, warning |
+| `check_rate_warning(storage, quiet)` | Print rate warning to stderr |
+
+### CLI changes
+- `status` subcommand: artists, videos, transcripts, summaries, prompts, jobs, DB size
+- `--dry-run` flag: preview bulk operations without performing work
+- Rate warnings before bulk transcribe operations
+
+### New test modules
+- test_rate_limit (19 tests): logging, thresholds, warnings, migration
+- test_status (18 tests): count methods, format_size, CLI output
+- test_dry_run (14 tests): transcribe/summarize bulk/single dry-run
+
+---
+
+## Session 9: Pipeline Parallelism — Phase 4 (325 tests)
+
+**Goal:** Concurrent transcribe + summarize for bulk operations.
+
+### New module: `pipeline.py` (195 lines)
+
+| Function | Purpose |
+|----------|---------|
+| `PipelineResult` | Dataclass: transcribed, errors, summarized, elapsed |
+| `_split_concurrency(total)` | Split workers: c=1→(1,1), c=3→(2,1) |
+| `run_pipeline(...)` | Producer-consumer with DB-polling coordination |
+
+### CLI changes
+
+- `_cmd_summarize` bulk path restructured:
+  - `if missing:` → pipeline mode (transcribe + summarize concurrent)
+  - `else:` → existing sequential `_run_bulk` (unchanged)
+- Worker closures, poll_fn, progress counters passed to pipeline
+- Pipeline output: "Pipeline: transcribed X, summarized Y new, Z already done (Ns)"
+
+### New test module: test_pipeline (17 tests)
+
+- TestSplitConcurrency (3): budget splitting
+- TestPipelineHappyPath (3): full pipeline, mixed state, summarize-only
+- TestPipelineErrors (3): error isolation both directions
+- TestPipelineProgress (2): tick counts, labels
+- TestPipelineTermination (2): completion, empty producer
+- TestPipelineDelay (1): inter-video delay enforcement
+- TestPipelineCLIIntegration (3): pipeline activation, sequential fallback, background jobs
+
+---
+
 ## Final Project State
 
-### Source code (2,775 lines across 12 modules)
+### Source code (~3,900 lines across 14 modules)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `cli.py` | 857 | CLI entry point, all commands, argparse, progress counter |
-| `storage.py` | 498 | SQLite ORM, migrations, all CRUD operations |
-| `jobs.py` | 381 | Background job management |
-| `transcriber.py` | 298 | Video transcription via yt-dlp subtitles |
-| `fetcher.py` | 240 | Channel URL fetching, artist/video resolution |
+| `cli.py` | 1,245 | CLI entry point, all commands, argparse, progress counter |
+| `storage.py` | 565 | SQLite ORM, migrations, all CRUD operations |
+| `jobs.py` | 424 | Background job management |
+| `transcriber.py` | 404 | Video transcription via yt-dlp subtitles |
+| `fetcher.py` | 254 | Channel URL fetching, artist/video resolution |
+| `yt_dlp_util.py` | 256 | yt-dlp configuration, URL validation, auth helpers |
+| `pipeline.py` | 195 | Producer-consumer pipeline for concurrent transcribe+summarize |
+| `llm.py` | 182 | OpenAI/Ollama client with caching and retry |
 | `summarizer.py` | 117 | LLM-powered summarization |
-| `llm.py` | 127 | OpenAI/Ollama client with caching |
 | `mcp_server.py` | 110 | MCP server for IDE integration |
-| `yt_dlp_util.py` | 82 | yt-dlp configuration helpers |
+| `rate_limit.py` | 85 | YouTube rate-limit tracking and warnings |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (2,852 lines across 20 modules, 170 tests)
+### Tests (25 modules, 325 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
-| `test_background_jobs.py` | 32 | Background jobs, progress, CLI integration |
+| `test_background_jobs.py` | 32+ | Background jobs, progress, CLI integration, retry |
 | `test_onboarding.py` | 22 | Hints, quickstart, quiet flag, first-run |
+| `test_rate_limit.py` | 19 | Rate logging, thresholds, warnings, migration |
+| `test_url_validation.py` | 18 | Channel/video URL validation, error detection |
+| `test_status.py` | 18 | Status command, count methods, format_size |
+| `test_pipeline.py` | 17 | Pipeline happy path, errors, progress, termination |
 | `test_parallel.py` | 16 | Parallel execution, progress counter |
+| `test_dry_run.py` | 14 | --dry-run for transcribe/summarize bulk/single |
 | `test_ux_improvements.py` | 14 | LLM caching, truncation, default prompt, version |
+| `test_cli.py` | ~25+ | CLI commands end-to-end |
 | `test_storage.py` | ~20 | Storage CRUD, migration, constraints |
-| `test_cli.py` | ~25 | CLI commands end-to-end |
-| `test_yt_dlp_util.py` | 12 | Rate-limit config, cookies, delays |
-| Others | ~29 | Fetcher, transcriber, summarizer, edge cases |
+| `test_llm_connectivity.py` | ~15+ | LLM retry, connectivity, error handling |
+| `test_yt_dlp_util.py` | 18 | Rate-limit config, cookies, delays, PO token, auth |
+| Others | ~30+ | Fetcher, transcriber, summarizer, edge cases |
 
-### Architecture decisions (11 ADRs)
+### Architecture decisions (12 ADRs)
 
 | ADR | Title |
 |-----|-------|
@@ -201,6 +313,7 @@ Added `_migrate_jobs_table()` to `storage.py`.
 | 0009 | Guided onboarding (hints, quickstart, --quiet) |
 | 0010 | YouTube rate-limit safety |
 | 0011 | Parallel execution with ThreadPoolExecutor |
+| 0012 | Pipeline parallelism for bulk transcribe + summarize |
 
 ---
 

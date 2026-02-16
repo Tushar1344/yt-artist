@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import time as _time
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -103,40 +104,79 @@ def get_client() -> Any:
     return _cached_client
 
 
+_MAX_LLM_RETRIES = 3
+_LLM_INITIAL_BACKOFF = 2  # seconds
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True if the exception looks transient (worth retrying)."""
+    msg = str(exc).lower()
+    # Connection/network errors
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    # HTTP 429, 500, 502, 503, 504 from the OpenAI SDK
+    for code in ("429", "500", "502", "503", "504"):
+        if code in msg:
+            return True
+    if "rate limit" in msg or "too many requests" in msg:
+        return True
+    if "timeout" in msg or "timed out" in msg:
+        return True
+    if "connection" in msg and ("refused" in msg or "reset" in msg or "error" in msg):
+        return True
+    return False
+
+
 def complete(
     system_prompt: str,
     user_content: str,
     *,
     model: Optional[str] = None,
+    max_retries: int = _MAX_LLM_RETRIES,
 ) -> str:
     """
     Call chat completion with system and user messages.
     Uses OPENAI_MODEL or defaults to mistral for Ollama, gpt-4o-mini for OpenAI.
-    Raises RuntimeError on API connection/rate-limit errors so callers can handle gracefully.
+    Retries up to *max_retries* times on transient errors (429, 5xx, timeouts).
+    Raises RuntimeError on persistent API errors so callers can handle gracefully.
     """
     client = get_client()
     _, _, default_model = _resolve_config()
     model = model or os.environ.get("OPENAI_MODEL") or default_model
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-        )
-    except Exception as exc:
-        base_url, _, _ = _resolve_config()
-        if _is_ollama(base_url):
-            log.error("LLM API call failed (Ollama at %s): %s", base_url, exc)
-            raise RuntimeError(
-                f"LLM API call failed. Is Ollama running? Start with: ollama serve\n"
-                f"Error: {exc}"
-            ) from exc
-        log.error("LLM API call failed (%s): %s", base_url, exc)
-        raise RuntimeError(f"LLM API call failed ({base_url}): {exc}") from exc
-    choice = resp.choices[0] if resp.choices else None
-    if not choice or not getattr(choice, "message", None):
-        log.warning("LLM returned no choices/message for model=%s", model)
-        return ""
-    return (choice.message.content or "").strip()
+    backoff = _LLM_INITIAL_BACKOFF
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+            )
+            choice = resp.choices[0] if resp.choices else None
+            if not choice or not getattr(choice, "message", None):
+                log.warning("LLM returned no choices/message for model=%s", model)
+                return ""
+            return (choice.message.content or "").strip()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries and _is_transient(exc):
+                log.warning("LLM call failed (attempt %d/%d), retrying in %ds: %s",
+                            attempt + 1, max_retries + 1, backoff, exc)
+                _time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+                continue
+            # Non-transient or retries exhausted
+            base_url, _, _ = _resolve_config()
+            if _is_ollama(base_url):
+                log.error("LLM API call failed (Ollama at %s): %s", base_url, exc)
+                raise RuntimeError(
+                    f"LLM API call failed. Is Ollama running? Start with: ollama serve\n"
+                    f"Error: {exc}"
+                ) from exc
+            log.error("LLM API call failed (%s): %s", base_url, exc)
+            raise RuntimeError(f"LLM API call failed ({base_url}): {exc}") from exc
+    # Should not reach here, but just in case
+    raise RuntimeError(f"LLM API call failed after {max_retries + 1} attempts: {last_exc}")

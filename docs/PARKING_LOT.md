@@ -13,7 +13,7 @@ they were identified during architecture review rather than explicitly requested
 
 ## P0: Ship Blockers
 
-### 1. Input validation and safe-fail on bad YouTube URLs `[suggestion]`
+### ~~1. Input validation and safe-fail on bad YouTube URLs~~ `[suggestion]` ✅ Done (Phase 1)
 **Why:** Right now, malformed URLs, private/deleted videos, and channels with zero public videos produce cryptic yt-dlp stderr errors. New users will hit this in the first 5 minutes.
 
 **Scope:**
@@ -26,7 +26,7 @@ they were identified during architecture review rather than explicitly requested
 
 ---
 
-### 2. `--dry-run` for bulk operations `[suggestion]`
+### ~~2. `--dry-run` for bulk operations~~ `[suggestion]` ✅ Done (Phase 3)
 **Why:** Users are nervous about running `transcribe --artist-id @channel` on 500 videos. They want to see what will happen before committing.
 
 **Scope:**
@@ -38,7 +38,7 @@ they were identified during architecture review rather than explicitly requested
 
 ---
 
-### 3. Security: warn about unencrypted DB in docs `[suggestion]`
+### ~~3. Security: warn about unencrypted DB in docs~~ `[suggestion]` ✅ Done (Phase 1)
 **Why:** The SQLite file contains all transcripts and summaries in plaintext. If users are summarizing sensitive content (corporate training, private channels), this is a data exposure risk. Users should know.
 
 **Scope:**
@@ -52,7 +52,7 @@ they were identified during architecture review rather than explicitly requested
 
 ## P1: High-Value Features
 
-### 4. `status` command `[suggestion]`
+### ~~4. `status` command~~ `[suggestion]` ✅ Done (Phase 3)
 **Why:** There's no single command that shows the state of your data. Users piece it together from `list-prompts`, `search-transcripts`, and `jobs`. This is the `git status` of yt-artist.
 
 **Scope:**
@@ -81,7 +81,7 @@ DB size:      12.4 MB
 
 ---
 
-### 6. Retry/resume for failed bulk jobs `[suggestion]`
+### ~~6. Retry/resume for failed bulk jobs~~ `[suggestion]` ✅ Done (Phase 2)
 **Why:** If a background job fails at video 30 of 50, there's no `jobs retry <id>`. You re-run the full command and it skips already-done ones, but re-checks all 30 (slow for large channels).
 
 **Scope:**
@@ -104,7 +104,7 @@ DB size:      12.4 MB
 
 ---
 
-### 21. Pipeline parallelism for bulk summarize `[observed in testing]`
+### ~~21. Pipeline parallelism for bulk summarize~~ `[observed in testing]` ✅ Done (Phase 4)
 **Why:** When `summarize --artist-id @X` needs to transcribe missing videos first, it blocks all summarization until every transcript is done. On a 459-video channel (@hubermanlab), this meant Ollama sat idle for 10+ hours while YouTube transcripts trickled in. Running separate transcribe and summarize commands concurrently caused duplicate YouTube requests and 429 rate-limit escalation.
 
 **Scope:**
@@ -147,7 +147,7 @@ DB size:      12.4 MB
 
 ---
 
-### 10. Rate-limit monitoring `[suggestion]`
+### ~~10. Rate-limit monitoring~~ `[suggestion]` ✅ Done (Phase 3)
 **Why:** Track how many YouTube requests we've made recently. If approaching a threshold, auto-slow-down rather than waiting for 429s.
 
 **Scope:**
