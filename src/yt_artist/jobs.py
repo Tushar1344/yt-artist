@@ -1,4 +1,5 @@
 """Background job management: launch, track, attach, stop."""
+
 from __future__ import annotations
 
 import logging
@@ -19,14 +20,15 @@ log = logging.getLogger("yt_artist.jobs")
 BG_SUGGESTION_THRESHOLD = 5
 
 # Time estimates (seconds per video, conservative)
-EST_TRANSCRIBE_PER_VIDEO = 8.0   # yt-dlp subtitle fetch + processing
-EST_SUMMARIZE_PER_VIDEO = 15.0   # LLM call + DB write
-EST_INTER_VIDEO_DELAY = 2.0      # Default inter-video delay
+EST_TRANSCRIBE_PER_VIDEO = 8.0  # yt-dlp subtitle fetch + processing
+EST_SUMMARIZE_PER_VIDEO = 15.0  # LLM call + DB write
+EST_INTER_VIDEO_DELAY = 2.0  # Default inter-video delay
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _generate_job_id() -> str:
     """Generate a 12-hex-char unique job ID."""
@@ -57,6 +59,7 @@ def _is_pid_alive(pid: int) -> bool:
 # Time estimation
 # ---------------------------------------------------------------------------
 
+
 def estimate_time(n_videos: int, operation: str, concurrency: int = 1) -> float:
     """Estimate total wall-clock seconds for a bulk operation."""
     if operation == "transcribe":
@@ -86,6 +89,7 @@ def format_estimate(seconds: float) -> str:
 # Background hint
 # ---------------------------------------------------------------------------
 
+
 def maybe_suggest_background(
     n_videos: int,
     operation: str,
@@ -105,7 +109,7 @@ def maybe_suggest_background(
     cmd_parts = [original_argv[0], "--bg"] + original_argv[1:]
     sys.stderr.write("\n")
     sys.stderr.write(f"  \U0001f551 This will process {n_videos} videos (estimated ~{est_str}).\n")
-    sys.stderr.write(f"  To run in background, re-run with --bg:\n")
+    sys.stderr.write("  To run in background, re-run with --bg:\n")
     sys.stderr.write(f"    {' '.join(cmd_parts)}\n")
     sys.stderr.write("\n")
 
@@ -113,6 +117,7 @@ def maybe_suggest_background(
 # ---------------------------------------------------------------------------
 # Job DB helpers
 # ---------------------------------------------------------------------------
+
 
 def _create_job_record(storage: Storage, job_id: str, command: str, log_path: Path) -> None:
     """Insert a new job row with status='running'."""
@@ -157,8 +162,12 @@ def get_job(storage: Storage, job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def update_job_progress(
-    storage: Storage, job_id: str,
-    *, done: int = None, errors: int = None, total: int = None,
+    storage: Storage,
+    job_id: str,
+    *,
+    done: int = None,
+    errors: int = None,
+    total: int = None,
 ) -> None:
     """Update progress fields on a job row."""
     parts: list[str] = []
@@ -184,15 +193,16 @@ def update_job_progress(
 
 
 def finalize_job(
-    storage: Storage, job_id: str,
-    status: str = "completed", error_message: str = None,
+    storage: Storage,
+    job_id: str,
+    status: str = "completed",
+    error_message: str = None,
 ) -> None:
     """Mark a job as finished (completed, failed, or stopped)."""
     conn = storage._conn()
     try:
         conn.execute(
-            "UPDATE jobs SET status = ?, finished_at = datetime('now'), error_message = ? "
-            "WHERE id = ?",
+            "UPDATE jobs SET status = ?, finished_at = datetime('now'), error_message = ? WHERE id = ?",
             (status, error_message, job_id),
         )
         conn.commit()
@@ -218,6 +228,7 @@ def _mark_job_stale(storage: Storage, job_id: str) -> None:
 # Launch background job
 # ---------------------------------------------------------------------------
 
+
 def launch_background(
     argv: List[str],
     storage: Storage,
@@ -232,13 +243,13 @@ def launch_background(
     log_dir = jobs_dir(data_dir)
     log_path = log_dir / f"{job_id}.log"
 
-    # Build child argv: python -m yt_artist.cli <original args minus --bg>
-    child_argv = [sys.executable, "-m", "yt_artist.cli"]
+    # Build child argv: python -m yt_artist.cli --_bg-worker <id> <original args minus --bg>
+    # Note: --_bg-worker is a top-level flag so it must come BEFORE the subcommand.
+    child_argv = [sys.executable, "-m", "yt_artist.cli", "--_bg-worker", job_id]
     for arg in argv[1:]:  # skip original argv[0]
         if arg in ("--bg", "--background"):
             continue
         child_argv.append(arg)
-    child_argv.extend(["--_bg-worker", job_id])
 
     # Human-readable command for display
     display_cmd = " ".join(a for a in argv[1:] if a not in ("--bg", "--background"))
@@ -263,6 +274,7 @@ def launch_background(
 # ---------------------------------------------------------------------------
 # List / attach / stop / clean
 # ---------------------------------------------------------------------------
+
 
 def list_jobs(storage: Storage, status_filter: str = None) -> List[Dict[str, Any]]:
     """Return recent jobs, optionally filtered by status.  Auto-detects stale PIDs."""
@@ -304,7 +316,7 @@ def attach_job(storage: Storage, job_id: str) -> None:
     sys.stderr.write("---\n")
 
     try:
-        with open(log_path, "r") as f:
+        with open(log_path) as f:
             # Print existing content
             for line in f:
                 sys.stdout.write(line)
@@ -347,7 +359,7 @@ def stop_job(storage: Storage, job_id: str) -> None:
         print(f"Sent SIGTERM to job {job['id'][:8]} (PID {pid}).")
     except ProcessLookupError:
         _mark_job_stale(storage, job["id"])
-        print(f"Process already dead. Job marked as failed.")
+        print("Process already dead. Job marked as failed.")
         return
     except PermissionError:
         raise SystemExit(f"Cannot signal PID {pid} (permission denied).")
@@ -369,6 +381,7 @@ def retry_job(job: Dict[str, Any], storage: Storage, data_dir: Path) -> str:
         raise SystemExit(f"Job {job['id'][:8]} has no command to retry.")
 
     import shlex
+
     argv_tail = shlex.split(command_str)
     # Build a full argv as if the user typed it
     full_argv = [sys.executable, "-m", "yt_artist.cli"] + argv_tail
@@ -380,11 +393,13 @@ def retry_job(job: Dict[str, Any], storage: Storage, data_dir: Path) -> str:
     display_cmd = command_str
     _create_job_record(storage, job_id, f"retry({job['id'][:8]}): {display_cmd}", log_path)
 
-    child_argv = full_argv + ["--_bg-worker", job_id]
+    # --_bg-worker is a top-level flag so it must come BEFORE the subcommand.
+    child_argv = [sys.executable, "-m", "yt_artist.cli", "--_bg-worker", job_id] + argv_tail
     # Carry over --db flag if original job used one
     if "--db" not in command_str:
         db_path = str(storage.db_path)
-        child_argv = [child_argv[0], child_argv[1], child_argv[2], "--db", db_path] + child_argv[3:]
+        # Insert --db after the base flags but before subcommand args
+        child_argv = [sys.executable, "-m", "yt_artist.cli", "--_bg-worker", job_id, "--db", db_path] + argv_tail
 
     log_fh = open(log_path, "w")  # noqa: SIM115
     proc = subprocess.Popen(
@@ -403,8 +418,7 @@ def cleanup_old_jobs(storage: Storage, max_age_days: int = 7) -> int:
     conn = storage._conn()
     try:
         cur = conn.execute(
-            "SELECT id, log_file FROM jobs WHERE status != 'running' "
-            "AND finished_at < datetime('now', ?)",
+            "SELECT id, log_file FROM jobs WHERE status != 'running' AND finished_at < datetime('now', ?)",
             (f"-{max_age_days} days",),
         )
         rows = cur.fetchall()
@@ -414,8 +428,7 @@ def cleanup_old_jobs(storage: Storage, max_age_days: int = 7) -> int:
                 log_path.unlink()
         if rows:
             conn.execute(
-                "DELETE FROM jobs WHERE status != 'running' "
-                "AND finished_at < datetime('now', ?)",
+                "DELETE FROM jobs WHERE status != 'running' AND finished_at < datetime('now', ?)",
                 (f"-{max_age_days} days",),
             )
             conn.commit()
