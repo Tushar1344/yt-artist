@@ -123,8 +123,10 @@ DB size:      12.4 MB
 
 ## P2: Quality of Life
 
-### 8. Transcript quality scoring `[suggestion]`
+### 8. Transcript quality scoring (pre-summarize) `[suggestion]`
 **Why:** Auto-generated subtitles vary wildly. Music videos produce gibberish. Non-English content misidentified as English produces garbage. Summarizing bad transcripts wastes LLM calls.
+
+**Note:** Session 10 added *summary* quality scoring (`scorer.py`), which assesses how good a summary is after generation. This item is about *transcript* quality scoring — detecting bad transcripts *before* spending LLM calls on summarization. Different problem, complementary solution.
 
 **Scope:**
 - Heuristic score: word count, repetition ratio, average word length

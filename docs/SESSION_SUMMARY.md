@@ -1,6 +1,6 @@
 # yt-artist Development Session Summary
 
-*Comprehensive summary of all 9 development sessions.*
+*Comprehensive summary of all 10 development sessions.*
 
 ---
 
@@ -258,35 +258,115 @@ CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);
 
 ---
 
+## Session 10: Long-Transcript Summarization & Quality Scoring (378 tests)
+
+**Goal:** Full-transcript summarization and automated quality assessment.
+
+### New module: `scorer.py` (~220 lines)
+
+| Function | Purpose |
+|----------|---------|
+| `_length_ratio_score(summary_len, transcript_len)` | Score summary/transcript length ratio |
+| `_repetition_score(summary)` | Detect sentence-level repetition (model looping) |
+| `_key_term_coverage(summary, transcript)` | Top-N transcript term coverage in summary |
+| `_structure_score(summary)` | Multi-sentence, bullets, section headers |
+| `heuristic_score(summary, transcript)` | Weighted composite: 0.3 length + 0.3 coverage + 0.2 repetition + 0.2 structure |
+| `_parse_llm_rating(text)` | Parse "4 3 5" LLM output into 3 integers |
+| `llm_score(summary, transcript)` | Tiny LLM call: rate completeness/coherence/faithfulness 1-5 |
+| `score_summary(summary, transcript)` | Full scoring: heuristic + optional LLM |
+| `score_video_summary(video_id, prompt_id, storage)` | DB-integrated: load, score, save |
+
+### Changes to `summarizer.py` (~265 lines added)
+
+| Function | Purpose |
+|----------|---------|
+| `_chunk_text(text, chunk_size, overlap)` | Sentence-boundary splitting with clamped overlap |
+| `_summarize_map_reduce(system_prompt, raw_text, max_chars)` | Chunk → map → reduce (recursive) |
+| `_summarize_refine(system_prompt, raw_text, max_chars)` | Iterative rolling summary |
+| `_get_strategy()` | Read strategy from env var |
+
+`summarize()` updated to dispatch by strategy: auto, truncate, map-reduce, refine.
+
+### Changes to `pipeline.py` (~60 lines added)
+
+- `PipelineResult`: added `scored`, `score_errors` fields
+- `run_pipeline()`: added `score_fn`, `score_poll_fn`, `score_progress` params
+- Stage 3: single-worker scoring after summarize pool completes
+
+### Schema changes
+
+```sql
+ALTER TABLE summaries ADD COLUMN quality_score REAL;
+ALTER TABLE summaries ADD COLUMN heuristic_score REAL;
+ALTER TABLE summaries ADD COLUMN llm_score REAL;
+```
+
+### Storage methods added
+
+| Method | Purpose |
+|--------|---------|
+| `update_summary_scores(video_id, prompt_id, ...)` | Write score columns |
+| `get_unscored_summaries(prompt_id, video_ids?)` | Query summaries without quality_score |
+| `count_scored_summaries()` | Count summaries with quality_score |
+| `avg_quality_score()` | Average quality_score across all scored |
+
+### CLI changes
+
+**New flags on `summarize`:**
+- `--strategy {auto,truncate,map-reduce,refine}`: summarization strategy
+- `--score` / `--no-score`: force scoring on/off (default: auto based on time estimate)
+
+**New subcommand:** `score`
+- `--artist-id @X`: score all summaries for an artist
+- `--prompt ID`: prompt to score (default: "default")
+- `--skip-llm`: heuristic-only scoring (faster)
+
+**Updated:** `status` command shows scoring stats (N scored, avg quality).
+
+### New test modules
+
+- `test_chunked_summarize.py` (18 tests): chunking, fill_template, strategy, single/map-reduce/refine
+- `test_scorer.py` (35 tests): heuristic components, LLM scoring, parse_llm_rating, DB integration
+
+### Bug fixes
+
+- **Infinite loop in `_chunk_text`**: overlap >= chunk_size caused no forward progress. Fixed by clamping `overlap = min(overlap, chunk_size // 2)`.
+- **Existing test for truncation**: `test_long_transcript_is_truncated` updated to use `strategy="truncate"` explicitly (default changed from truncate to auto).
+
+---
+
 ## Final Project State
 
-### Source code (~3,900 lines across 14 modules)
+### Source code (~5,400 lines across 15 modules)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `cli.py` | 1,245 | CLI entry point, all commands, argparse, progress counter |
-| `storage.py` | 565 | SQLite ORM, migrations, all CRUD operations |
+| `cli.py` | ~1,500 | CLI entry point, all commands, argparse, progress counter |
+| `storage.py` | ~650 | SQLite ORM, migrations, all CRUD operations |
 | `jobs.py` | 424 | Background job management |
 | `transcriber.py` | 404 | Video transcription via yt-dlp subtitles |
+| `summarizer.py` | ~330 | LLM-powered summarization with chunking strategies |
+| `scorer.py` | ~220 | Quality scoring: heuristic + LLM self-check |
 | `fetcher.py` | 254 | Channel URL fetching, artist/video resolution |
 | `yt_dlp_util.py` | 256 | yt-dlp configuration, URL validation, auth helpers |
-| `pipeline.py` | 195 | Producer-consumer pipeline for concurrent transcribe+summarize |
+| `pipeline.py` | ~240 | 3-stage producer-consumer pipeline |
 | `llm.py` | 182 | OpenAI/Ollama client with caching and retry |
-| `summarizer.py` | 117 | LLM-powered summarization |
 | `mcp_server.py` | 110 | MCP server for IDE integration |
 | `rate_limit.py` | 85 | YouTube rate-limit tracking and warnings |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (25 modules, 325 tests)
+### Tests (27 modules, 378 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
+| `test_scorer.py` | 35 | Quality scoring: heuristic, LLM, DB integration |
 | `test_background_jobs.py` | 32+ | Background jobs, progress, CLI integration, retry |
 | `test_onboarding.py` | 22 | Hints, quickstart, quiet flag, first-run |
 | `test_rate_limit.py` | 19 | Rate logging, thresholds, warnings, migration |
 | `test_url_validation.py` | 18 | Channel/video URL validation, error detection |
+| `test_chunked_summarize.py` | 18 | Chunking, map-reduce, refine, strategies |
 | `test_status.py` | 18 | Status command, count methods, format_size |
 | `test_pipeline.py` | 17 | Pipeline happy path, errors, progress, termination |
 | `test_parallel.py` | 16 | Parallel execution, progress counter |
@@ -298,7 +378,7 @@ CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);
 | `test_yt_dlp_util.py` | 18 | Rate-limit config, cookies, delays, PO token, auth |
 | Others | ~30+ | Fetcher, transcriber, summarizer, edge cases |
 
-### Architecture decisions (12 ADRs)
+### Architecture decisions (13 ADRs)
 
 | ADR | Title |
 |-----|-------|
@@ -314,32 +394,20 @@ CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);
 | 0010 | YouTube rate-limit safety |
 | 0011 | Parallel execution with ThreadPoolExecutor |
 | 0012 | Pipeline parallelism for bulk transcribe + summarize |
+| 0013 | Long-transcript summarization strategies and quality scoring |
 
 ---
 
 ## Parking Lot (Future Sessions)
 
-These items were explicitly deferred by the user:
+These items were explicitly deferred by the user. See [PARKING_LOT.md](PARKING_LOT.md) for the full prioritized list.
 
-1. **Performance language migration:** Analyze which hot paths could benefit from Rust, Go, or C++ (yt-dlp subprocess management, large transcript processing, SQLite batch operations).
-
-2. **Licensing and payment model:**
-   - Free tier: up to 10,000 summaries
-   - Paid tier: beyond 50,000 summaries
-   - Questions to resolve: per-summary pricing, subscription vs usage-based, self-hosted vs cloud
-
-3. **Usage metrics tracking:**
-   - Summaries generated (total, per artist, per day)
-   - Transcripts processed
-   - API calls made (LLM, YouTube)
-   - Processing time per operation
-   - Background job success/failure rates
-
-4. **Shippable product readiness:**
-   - PyPI package publication
-   - Homebrew tap for Mac distribution
-   - Documentation polish for non-technical users
-   - CI/CD pipeline (GitHub Actions)
-   - Release versioning strategy
-
-5. **Blog post:** Write a public blog about the human-AI collaborative development process and publish it.
+Key items:
+1. Export/backup (P1)
+2. MCP server dependency fix (P1)
+3. Transcript quality scoring — pre-summarize (P2, distinct from summary scoring done in Session 10)
+4. Performance language migration (P3)
+5. Licensing and payment model (P3)
+6. Usage metrics tracking (P3)
+7. Shippable product readiness (P3)
+8. Blog post (P3)

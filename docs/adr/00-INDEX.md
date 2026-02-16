@@ -16,5 +16,6 @@
   - [ADR-0010](0010-rate-limit-safety.md) — YouTube rate-limit safety (delays, backoff, cookies)
   - [ADR-0011](0011-parallel-execution.md) — Parallel execution with ThreadPoolExecutor
   - [ADR-0012](0012-pipeline-parallelism.md) — Pipeline parallelism for bulk transcribe + summarize (accepted)
+  - [ADR-0013](0013-long-transcript-summarization.md) — Long-transcript summarization strategies and quality scoring (accepted)
 - **User experience**
   - [ADR-0009](0009-guided-onboarding.md) — Guided onboarding (hints, quickstart, --quiet)

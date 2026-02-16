@@ -125,10 +125,14 @@ export DB=./yt.db
 | `jobs attach <job_id>` | Tail the log of a job. Press Ctrl-C to detach (job keeps running). |
 | `jobs stop <job_id>` | Send SIGTERM to stop a running background job. |
 | `jobs clean` | Remove finished jobs older than 7 days and their log files. |
+| `score` [--artist-id @X] [--prompt ID] [--skip-llm] | Score summaries for quality (heuristic + LLM self-check). |
+| `status` | Overview: artists, videos, transcripts, summaries (with scoring stats), jobs, DB size. |
 | `quickstart` | Print a guided 3-step walkthrough using @TED as an example. |
 | `doctor` | Check your setup: yt-dlp installation, YouTube authentication, PO token, LLM endpoint, test metadata fetch. |
 
 **Global options:** `--db PATH`, `--data-dir PATH`, `--bg` (run in background), `-q`/`--quiet` (suppress hints)
+
+**Summarize options:** `--strategy {auto,truncate,map-reduce,refine}`, `--score`/`--no-score`
 
 > **Note:** Global options must appear **before** the subcommand. For example: `yt-artist --quiet summarize ...` (correct), not `yt-artist summarize ... --quiet` (error).
 
@@ -143,6 +147,8 @@ export DB=./yt.db
 - **Next-step hints:** After each command, yt-artist prints a hint to stderr suggesting what to do next. For example, after `fetch-channel`, it suggests `transcribe`. Use `--quiet` to suppress all hints.
 - **Parallel execution:** Bulk transcribe and summarize process videos in parallel (default: 2 workers). Control with `YT_ARTIST_MAX_CONCURRENCY`.
 - **Rate-limit safety:** yt-dlp requests include sleep intervals between requests. Inter-video delay (default 2s) prevents hammering YouTube. All configurable via environment variables.
+- **Summarization strategies:** Long transcripts (>30K chars) are automatically chunked and summarized using map-reduce. Use `--strategy refine` for maximum coherence on important videos. The `auto` strategy (default) picks the best approach based on transcript length.
+- **Quality scoring:** After summarization, each summary can be scored automatically. Heuristic scoring (instant, no LLM cost) checks length ratio, repetition, key-term coverage, and structure. LLM self-check (1 extra tiny call) rates completeness, coherence, and faithfulness. Scoring runs automatically during bulk summarize (skipped for very long runs >3h; override with `--score`). Run `yt-artist score --artist-id @X` to score existing summaries.
 
 ---
 
@@ -214,6 +220,11 @@ To confirm cookies are detected, run `yt-artist doctor` — you should see `Cook
 **Security note:** Using cookies ties YouTube traffic to your Google account. Prefer a secondary/throwaway account when using cookies with yt-artist/yt-dlp.
 
 Cookies and PO token can be used together (they serve different purposes: cookies = session auth, PO token = proof of origin for bot detection). With the auto-provider installed (default), cookies are optional and only needed for restricted content or as a fallback.
+
+## Environment (summarization)
+
+- **`YT_ARTIST_MAX_TRANSCRIPT_CHARS`** — Max characters sent to LLM per call (default: 30000). Transcripts exceeding this are chunked automatically.
+- **`YT_ARTIST_SUMMARIZE_STRATEGY`** — Default summarization strategy: `auto` (default), `truncate`, `map-reduce`, `refine`. Overridden by `--strategy` CLI flag.
 
 ## Environment (rate limits & performance)
 

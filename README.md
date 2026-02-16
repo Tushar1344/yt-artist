@@ -4,7 +4,8 @@ Fetch YouTube channel video URLs, transcribe videos, and generate AI-powered sum
 
 - **Fetch/urllist:** Given a channel URL, writes urllist markdown and stores artists/videos in SQLite.
 - **Transcribe:** One video (by URL or id) or bulk per artist (with optional auto-fetch of urllist). Parallel execution with configurable concurrency.
-- **Summarize:** One video or bulk per artist; uses per-artist default prompt or `--prompt`. Auto-creates artist/video/transcript when missing. Parallel execution.
+- **Summarize:** One video or bulk per artist; uses per-artist default prompt or `--prompt`. Auto-creates artist/video/transcript when missing. Parallel execution. Long transcripts handled via map-reduce or refine strategies (`--strategy`).
+- **Quality scoring:** Automated heuristic + LLM self-check scoring for summaries. Runs as a 3rd pipeline stage. Standalone `yt-artist score` command.
 - **Background jobs:** Push long-running bulk operations to the background with `--bg`. Monitor with `yt-artist jobs`, attach to logs, stop running jobs.
 - **Per-artist default prompt** and optional **build-artist-prompt** (search + "about" text).
 - **Guided onboarding:** Next-step hints after every command, `quickstart` walkthrough, `--quiet` for scripting.
@@ -79,6 +80,10 @@ yt-artist transcribe --artist-id @channel
 # Summarize one video or all for an artist (prompt: --prompt else artist default)
 yt-artist summarize "https://youtube.com/watch?v=VIDEO_ID"
 yt-artist summarize --artist-id @channel
+yt-artist summarize --artist-id @channel --strategy refine  # max coherence for long transcripts
+
+# Score summaries for quality (heuristic + LLM self-check)
+yt-artist score --artist-id @channel
 
 # Background: push long-running bulk ops to background
 yt-artist --bg transcribe --artist-id @channel
@@ -172,7 +177,7 @@ yt-artist --db test_run.db summarize --artist-id @SomeChannel
 
 ## Docs
 
-- [Architecture decisions](docs/adr/00-INDEX.md) — ADR index (11 ADRs)
+- [Architecture decisions](docs/adr/00-INDEX.md) — ADR index (13 ADRs)
 - [Architecture diagrams](claude/ARCHITECTURE_DIAGRAMS.md) — module graph, data flow, ER diagram, background jobs, parallelism, onboarding, rate-limit stack
 - [Development journey](docs/JOURNEY.md) — how this project was built iteratively
 - [Session summary](docs/SESSION_SUMMARY.md) — detailed technical log of all development sessions

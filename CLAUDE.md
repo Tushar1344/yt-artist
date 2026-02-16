@@ -40,6 +40,8 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Background jobs: re-exec as subprocess with --_bg-worker flag
 - Concurrency via ThreadPoolExecutor, capped at MAX_CONCURRENCY=3
 - Pipeline parallelism: producer-consumer with DB-polling in pipeline.py (ADR-0012)
+- Long-transcript strategies: auto/truncate/map-reduce/refine in summarizer.py (ADR-0013)
+- Quality scoring: heuristic + LLM self-check in scorer.py, decoupled 3rd pipeline stage
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 
@@ -70,6 +72,8 @@ YT_ARTIST_COOKIES_FILE          # Netscape cookies file
 OPENAI_API_KEY                  # triggers OpenAI instead of Ollama
 OPENAI_BASE_URL                 # LLM endpoint (default: localhost:11434/v1)
 OPENAI_MODEL                    # LLM model name
+YT_ARTIST_MAX_TRANSCRIPT_CHARS  # max chars sent to LLM (default: 30000)
+YT_ARTIST_SUMMARIZE_STRATEGY    # auto|truncate|map-reduce|refine (default: auto)
 ```
 
 ## Worktree / Parallel Work

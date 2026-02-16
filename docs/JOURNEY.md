@@ -1,6 +1,6 @@
 # The yt-artist Development Journey: Building a CLI Tool with Human-AI Collaboration
 
-*A record of iterative, collaborative development between a human developer and Claude across 9 sessions.*
+*A record of iterative, collaborative development between a human developer and Claude across 10 sessions.*
 
 ---
 
@@ -172,18 +172,55 @@ We built a producer-consumer pipeline:
 
 ---
 
+## Session 10: Long-Transcript Summarization & Quality Scoring
+
+**Focus:** Full-transcript summarization and automated quality assessment.
+
+**The problem:**
+Huberman Lab transcripts are 30K–160K chars. The Mistral 7B context window is ~30K chars. We were silently truncating up to 80% of long transcripts — users had no idea what was lost.
+
+**What we built:**
+
+### Chunking + strategies (summarizer.py, ~265 lines added)
+- `_chunk_text()`: sentence-boundary splitting with configurable overlap, clamped to prevent infinite loops.
+- `_summarize_map_reduce()`: chunk → summarize each → combine → recursive reduce if still too long.
+- `_summarize_refine()`: iterative rolling summary — best coherence for narrative content.
+- `auto` strategy (new default): single-pass if fits, map-reduce if too long.
+- `--strategy` CLI flag: `auto`, `truncate`, `map-reduce`, `refine`.
+
+### Quality scoring (scorer.py, new ~220 lines)
+Decoupled from summarization — scoring is a separate pipeline stage.
+- Heuristic scoring: length ratio, repetition detection, key-term coverage, structural analysis. Instant, zero LLM cost.
+- LLM self-check: tiny prompt asking model to rate completeness/coherence/faithfulness 1–5.
+- Combined: `quality_score = 0.4 * heuristic + 0.6 * llm`. Falls back to heuristic-only on LLM failure.
+
+### 3-stage pipeline (pipeline.py, ~60 lines added)
+- transcribe → summarize → score running concurrently via DB-polling.
+- Scoring auto-skips when estimated runtime >3h (override with `--score`).
+
+### CLI integration
+- `yt-artist score --artist-id @X` — standalone scoring for already-summarized videos.
+- `--score`/`--no-score` flags on summarize.
+- `status` command shows scoring stats (N scored, avg quality).
+
+**Result:** 378 tests passing (53 new). Full transcripts summarized instead of truncated. Quality visible at a glance.
+
+**Key technical fix:** The chunking overlap logic had an infinite loop when `overlap >= chunk_size`. Clamping overlap to `min(overlap, chunk_size // 2)` and ensuring forward progress fixed it.
+
+---
+
 ## What We Built: By the Numbers
 
 | Metric | Value |
 |--------|-------|
-| Source files | 14 Python modules |
-| Source lines | ~3,900 |
-| Test files | 25 test modules |
-| Total tests | 325 |
-| ADRs | 12 (0001-0012) |
-| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py` |
-| Sessions | 9 |
-| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 |
+| Source files | 15 Python modules |
+| Source lines | ~5,400 |
+| Test files | 27 test modules |
+| Total tests | 378 |
+| ADRs | 13 (0001-0013) |
+| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py` |
+| Sessions | 10 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 |
 
 ---
 
