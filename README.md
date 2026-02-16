@@ -178,7 +178,7 @@ yt-artist --db test_run.db summarize --artist-id @SomeChannel
 ## Docs
 
 - [Architecture decisions](docs/adr/00-INDEX.md) — ADR index (13 ADRs)
-- [Architecture diagrams](claude/ARCHITECTURE_DIAGRAMS.md) — module graph, data flow, ER diagram, background jobs, parallelism, onboarding, rate-limit stack
+- [Architecture diagrams](docs/ARCHITECTURE_DIAGRAMS.md) — module graph, data flow, ER diagram, pipeline, strategies, scoring, rate-limit stack
 - [Development journey](docs/JOURNEY.md) — how this project was built iteratively
 - [Session summary](docs/SESSION_SUMMARY.md) — detailed technical log of all development sessions
 - [Parking lot](docs/PARKING_LOT.md) — prioritized future work with suggestion flags
