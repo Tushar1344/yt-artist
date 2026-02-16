@@ -1,4 +1,5 @@
 """Tests for UX / performance improvements batch."""
+
 from __future__ import annotations
 
 import os
@@ -21,24 +22,30 @@ def _make_store(tmp_path: Path) -> Storage:
 # UX-3: DB-first fast path in ensure_artist_and_video — skip yt-dlp
 # ---------------------------------------------------------------------------
 
-class TestEnsureArtistVideoFastPath:
 
+class TestEnsureArtistVideoFastPath:
     def test_db_hit_skips_yt_dlp(self, tmp_path):
         """When video + artist are already in DB, no yt-dlp subprocess should run."""
         store = _make_store(tmp_path)
         store.upsert_artist(
-            artist_id="@TestCh", name="Test Channel",
+            artist_id="@TestCh",
+            name="Test Channel",
             channel_url="https://www.youtube.com/@TestCh",
             urllist_path="data/artists/@TestCh/urllist.md",
         )
         store.upsert_video(
-            video_id="abc12345678", artist_id="@TestCh",
-            url="https://www.youtube.com/watch?v=abc12345678", title="Existing",
+            video_id="abc12345678",
+            artist_id="@TestCh",
+            url="https://www.youtube.com/watch?v=abc12345678",
+            title="Existing",
         )
         from yt_artist.fetcher import ensure_artist_and_video_for_video_url
+
         with patch("yt_artist.fetcher._video_metadata") as mock_meta:
             aid, vid = ensure_artist_and_video_for_video_url(
-                "https://www.youtube.com/watch?v=abc12345678", store, tmp_path,
+                "https://www.youtube.com/watch?v=abc12345678",
+                store,
+                tmp_path,
             )
             # _video_metadata (yt-dlp) should NOT be called
             mock_meta.assert_not_called()
@@ -49,14 +56,20 @@ class TestEnsureArtistVideoFastPath:
         """When video is NOT in DB, yt-dlp metadata fetch should run."""
         store = _make_store(tmp_path)
         from yt_artist.fetcher import ensure_artist_and_video_for_video_url
+
         with patch("yt_artist.fetcher._video_metadata") as mock_meta:
             mock_meta.return_value = {
-                "id": "newvid456789", "title": "New",
-                "channel_id": "UCnew", "uploader_id": "@NewCh", "channel": "New Channel",
+                "id": "newvid456789",
+                "title": "New",
+                "channel_id": "UCnew",
+                "uploader_id": "@NewCh",
+                "channel": "New Channel",
             }
             with patch("yt_artist.fetcher.fetch_channel") as mock_fetch:
                 aid, vid = ensure_artist_and_video_for_video_url(
-                    "https://www.youtube.com/watch?v=newvid456789", store, tmp_path,
+                    "https://www.youtube.com/watch?v=newvid456789",
+                    store,
+                    tmp_path,
                 )
             mock_meta.assert_called_once()
             mock_fetch.assert_not_called()
@@ -68,18 +81,21 @@ class TestEnsureArtistVideoFastPath:
 # UX-4: Cached OpenAI client
 # ---------------------------------------------------------------------------
 
-class TestLLMClientCaching:
 
+class TestLLMClientCaching:
     def test_client_is_reused(self):
         """get_client() should return the same object on consecutive calls with same config."""
-        from yt_artist.llm import get_client, _cached_client, _cached_client_key
         import yt_artist.llm as llm_mod
+        from yt_artist.llm import get_client
+
         # Reset cache
         llm_mod._cached_client = None
         llm_mod._cached_client_key = None
 
-        with patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")), \
-             patch("yt_artist.llm.OpenAI") as MockOpenAI:
+        with (
+            patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
+            patch("yt_artist.llm.OpenAI") as MockOpenAI,
+        ):
             MockOpenAI.return_value = "mock_client"
             c1 = get_client()
             c2 = get_client()
@@ -89,17 +105,22 @@ class TestLLMClientCaching:
 
     def test_client_refreshes_on_config_change(self):
         """get_client() should create a new client when config changes."""
-        from yt_artist.llm import get_client
         import yt_artist.llm as llm_mod
+        from yt_artist.llm import get_client
+
         llm_mod._cached_client = None
         llm_mod._cached_client_key = None
 
-        configs = iter([
-            ("http://localhost:11434/v1", "ollama", "mistral"),
-            ("https://api.openai.com/v1", "sk-xxx", "gpt-4o-mini"),
-        ])
-        with patch("yt_artist.llm._resolve_config", side_effect=lambda: next(configs)), \
-             patch("yt_artist.llm.OpenAI") as MockOpenAI:
+        configs = iter(
+            [
+                ("http://localhost:11434/v1", "ollama", "mistral"),
+                ("https://api.openai.com/v1", "sk-xxx", "gpt-4o-mini"),
+            ]
+        )
+        with (
+            patch("yt_artist.llm._resolve_config", side_effect=lambda: next(configs)),
+            patch("yt_artist.llm.OpenAI") as MockOpenAI,
+        ):
             MockOpenAI.side_effect = lambda **kw: f"client_{kw['base_url']}"
             c1 = get_client()
             c2 = get_client()
@@ -111,27 +132,37 @@ class TestLLMClientCaching:
 # UX-5: Transcript truncation
 # ---------------------------------------------------------------------------
 
-class TestTranscriptTruncation:
 
+class TestTranscriptTruncation:
     def test_long_transcript_is_truncated(self, tmp_path):
         """Transcript longer than MAX_TRANSCRIPT_CHARS is truncated before LLM call."""
         store = _make_store(tmp_path)
         store.upsert_artist(
-            artist_id="@A", name="A", channel_url="https://youtube.com/@A",
+            artist_id="@A",
+            name="A",
+            channel_url="https://youtube.com/@A",
             urllist_path="data/artists/@A/urllist.md",
         )
-        store.upsert_video(video_id="vid001234567", artist_id="@A",
-                           url="https://youtube.com/watch?v=vid001234567", title="Vid")
+        store.upsert_video(
+            video_id="vid001234567", artist_id="@A", url="https://youtube.com/watch?v=vid001234567", title="Vid"
+        )
         store.save_transcript(video_id="vid001234567", raw_text="x" * 50_000, format="vtt")
         store.upsert_prompt(prompt_id="p1", name="P", template="Summarize: {video}")
 
         from yt_artist.summarizer import summarize
-        with patch("yt_artist.summarizer.complete", return_value="Summary text") as mock_complete, \
-             patch.dict(os.environ, {"YT_ARTIST_MAX_TRANSCRIPT_CHARS": "1000"}):
-            summarize("vid001234567", "p1", store)
+
+        with (
+            patch("yt_artist.summarizer.complete", return_value="Summary text") as mock_complete,
+            patch.dict(os.environ, {"YT_ARTIST_MAX_TRANSCRIPT_CHARS": "1000"}),
+        ):
+            summarize("vid001234567", "p1", store, strategy="truncate")
         # The user_content passed to complete should be truncated
         call_args = mock_complete.call_args
-        user_content = call_args.kwargs.get("user_content") or call_args[1] if len(call_args[0]) > 1 else call_args.kwargs.get("user_content")
+        user_content = (
+            call_args.kwargs.get("user_content") or call_args[1]
+            if len(call_args[0]) > 1
+            else call_args.kwargs.get("user_content")
+        )
         # Positional or keyword — get user_content either way
         if user_content is None:
             user_content = call_args[0][1]
@@ -143,15 +174,19 @@ class TestTranscriptTruncation:
         """Transcript shorter than limit is passed verbatim."""
         store = _make_store(tmp_path)
         store.upsert_artist(
-            artist_id="@A", name="A", channel_url="https://youtube.com/@A",
+            artist_id="@A",
+            name="A",
+            channel_url="https://youtube.com/@A",
             urllist_path="data/artists/@A/urllist.md",
         )
-        store.upsert_video(video_id="vid001234567", artist_id="@A",
-                           url="https://youtube.com/watch?v=vid001234567", title="Vid")
+        store.upsert_video(
+            video_id="vid001234567", artist_id="@A", url="https://youtube.com/watch?v=vid001234567", title="Vid"
+        )
         store.save_transcript(video_id="vid001234567", raw_text="Short text", format="vtt")
         store.upsert_prompt(prompt_id="p1", name="P", template="Summarize: {video}")
 
         from yt_artist.summarizer import summarize
+
         with patch("yt_artist.summarizer.complete", return_value="Summary text") as mock_complete:
             summarize("vid001234567", "p1", store)
         call_args = mock_complete.call_args
@@ -163,8 +198,8 @@ class TestTranscriptTruncation:
 # UX-7: Built-in default prompt
 # ---------------------------------------------------------------------------
 
-class TestDefaultPrompt:
 
+class TestDefaultPrompt:
     def test_default_prompt_created_on_fresh_db(self, tmp_path):
         """ensure_schema on a new DB should auto-create 'default' prompt."""
         store = _make_store(tmp_path)
@@ -198,23 +233,27 @@ class TestDefaultPrompt:
 # UX-12: Header row in search-transcripts
 # ---------------------------------------------------------------------------
 
-class TestSearchTranscriptsHeader:
 
+class TestSearchTranscriptsHeader:
     def test_output_includes_header(self, tmp_path, capfd):
         """search-transcripts should print a header row before data."""
-        import sys
         import logging as _logging
+        import sys
+
         from yt_artist.cli import main
 
         db = tmp_path / "test.db"
         store = Storage(db)
         store.ensure_schema()
         store.upsert_artist(
-            artist_id="@A", name="A", channel_url="https://youtube.com/@A",
+            artist_id="@A",
+            name="A",
+            channel_url="https://youtube.com/@A",
             urllist_path="data/artists/@A/urllist.md",
         )
-        store.upsert_video(video_id="vid001234567", artist_id="@A",
-                           url="https://youtube.com/watch?v=vid001234567", title="Test")
+        store.upsert_video(
+            video_id="vid001234567", artist_id="@A", url="https://youtube.com/watch?v=vid001234567", title="Test"
+        )
         store.save_transcript(video_id="vid001234567", raw_text="Hello", format="vtt")
 
         _logging.root.handlers.clear()
@@ -231,19 +270,19 @@ class TestSearchTranscriptsHeader:
 # UX-16: --version flag
 # ---------------------------------------------------------------------------
 
-class TestVersionFlag:
 
+class TestVersionFlag:
     def test_version_prints_and_exits(self, capfd):
         """--version should print version and exit."""
-        import sys
         import logging as _logging
-        from yt_artist.cli import main
+        import sys
+
         from yt_artist import __version__
+        from yt_artist.cli import main
 
         _logging.root.handlers.clear()
-        with patch.object(sys, "argv", ["yt-artist", "--version"]):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
+        with patch.object(sys, "argv", ["yt-artist", "--version"]), pytest.raises(SystemExit) as exc_info:
+            main()
         assert exc_info.value.code == 0
         captured = capfd.readouterr()
         assert __version__ in captured.out

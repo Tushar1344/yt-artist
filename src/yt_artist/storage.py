@@ -1,10 +1,12 @@
 """Storage layer: SQLite CRUD for artists, videos, transcripts, prompts, summaries."""
-from contextlib import contextmanager
+
 import logging
-from pathlib import Path
 import re
 import sqlite3
-from typing import Any, Dict, Generator, List, Optional, Union
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from yt_artist.init_db import get_schema_sql
 
@@ -65,6 +67,7 @@ class SummaryRow(TypedDict):
 
 class TranscriptListRow(TypedDict, total=False):
     """Row returned by list_transcripts (join)."""
+
     video_id: str
     format: str
     created_at: str
@@ -76,6 +79,7 @@ class TranscriptListRow(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # Storage class
 # ---------------------------------------------------------------------------
+
 
 def _dict_row(cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
     return {col[0]: row[i] for i, col in enumerate(cursor.description)}
@@ -131,6 +135,8 @@ class Storage:
             self._migrate_jobs_table(conn)
             conn.commit()
             self._migrate_request_log_table(conn)
+            conn.commit()
+            self._migrate_summary_score_columns(conn)
             conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
@@ -192,6 +198,18 @@ class Storage:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp)")
+
+    def _migrate_summary_score_columns(self, conn: sqlite3.Connection) -> None:
+        """Add quality_score, heuristic_score, llm_score columns to summaries if missing."""
+        cur = conn.execute("PRAGMA table_info(summaries)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "quality_score" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN quality_score REAL")
+        if "heuristic_score" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN heuristic_score REAL")
+        if "llm_score" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN llm_score REAL")
 
     # ------ Artists ------
 
@@ -502,6 +520,74 @@ class Storage:
                 [prompt_id] + video_ids,
             )
             return {row["video_id"] if isinstance(row, dict) else row[0] for row in cur.fetchall()}
+        finally:
+            conn.close()
+
+    # ------ Scoring ------
+
+    def update_summary_scores(
+        self,
+        *,
+        video_id: str,
+        prompt_id: str,
+        quality_score: Optional[float],
+        heuristic_score: Optional[float],
+        llm_score: Optional[float],
+    ) -> None:
+        """Write quality scores to an existing summary row."""
+        conn = self._conn()
+        try:
+            conn.execute(
+                "UPDATE summaries SET quality_score = ?, heuristic_score = ?, llm_score = ? "
+                "WHERE video_id = ? AND prompt_id = ?",
+                (quality_score, heuristic_score, llm_score, video_id, prompt_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_unscored_summaries(self, prompt_id: str, video_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Return summaries that have no quality_score yet for the given prompt.
+
+        If *video_ids* is provided, restrict to that set.
+        Returns list of dicts with at least video_id, prompt_id.
+        """
+        conn = self._conn()
+        try:
+            if video_ids:
+                placeholders = ",".join("?" for _ in video_ids)
+                cur = conn.execute(
+                    f"SELECT video_id, prompt_id FROM summaries "
+                    f"WHERE prompt_id = ? AND quality_score IS NULL AND video_id IN ({placeholders})",
+                    [prompt_id] + video_ids,
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT video_id, prompt_id FROM summaries WHERE prompt_id = ? AND quality_score IS NULL",
+                    (prompt_id,),
+                )
+            return cur.fetchall()
+        finally:
+            conn.close()
+
+    def count_scored_summaries(self) -> int:
+        """Return number of summaries that have a quality_score."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT COUNT(*) AS cnt FROM summaries WHERE quality_score IS NOT NULL")
+            row = cur.fetchone()
+            return row["cnt"] if isinstance(row, dict) else row[0]
+        finally:
+            conn.close()
+
+    def avg_quality_score(self) -> Optional[float]:
+        """Return average quality_score across all scored summaries, or None if none scored."""
+        conn = self._conn()
+        try:
+            cur = conn.execute("SELECT AVG(quality_score) AS avg_score FROM summaries WHERE quality_score IS NOT NULL")
+            row = cur.fetchone()
+            val = row["avg_score"] if isinstance(row, dict) else row[0]
+            return round(val, 2) if val is not None else None
         finally:
             conn.close()
 

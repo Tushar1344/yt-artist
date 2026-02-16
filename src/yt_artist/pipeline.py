@@ -7,13 +7,14 @@ transcript lands in the DB, the summarize poller picks it up.
 Coordination is via DB-polling (per ADR-0012): simpler, idempotent,
 crash-recoverable.  No in-memory queue to lose on crash.
 """
+
 from __future__ import annotations
 
 import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, List, Set, Tuple
 
 log = logging.getLogger("yt_artist.pipeline")
@@ -29,6 +30,8 @@ class PipelineResult:
     transcribe_errors: int = 0
     summarized: int = 0
     summarize_errors: int = 0
+    scored: int = 0
+    score_errors: int = 0
     elapsed: float = 0.0
 
 
@@ -62,14 +65,20 @@ def run_pipeline(
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     transcribe_progress: Any = None,
     summarize_progress: Any = None,
+    score_fn: Callable[[str], Tuple[str, str | None]] | None = None,
+    score_poll_fn: Callable[[], List[str]] | None = None,
+    score_progress: Any = None,
 ) -> PipelineResult:
-    """Run transcribe-then-summarize pipeline with overlapping execution.
+    """Run transcribe→summarize→score pipeline with overlapping execution.
 
     Producer: transcribe workers process *video_ids_to_transcribe*.
     Consumer: summarize workers process *video_ids_to_summarize* immediately,
               plus poll for newly transcribed videos via *poll_fn*.
+    Scorer (optional): polls for summarized-but-unscored videos via *score_poll_fn*
+              and runs *score_fn* on each.  Activated only when both are provided.
 
     *poll_fn* should return video IDs that have transcripts but no summaries.
+    *score_poll_fn* should return video IDs that have summaries but no quality score.
     Progress counters are optional ``_ProgressCounter`` instances from cli.py
     (typed ``Any`` to avoid circular imports).
     """
@@ -85,8 +94,7 @@ def run_pipeline(
     result_lock = threading.Lock()
 
     log.info(
-        "Pipeline: %d to transcribe, %d to summarize immediately, %d total. "
-        "Workers: %d transcribe, %d summarize.",
+        "Pipeline: %d to transcribe, %d to summarize immediately, %d total. Workers: %d transcribe, %d summarize.",
         len(video_ids_to_transcribe),
         len(video_ids_to_summarize),
         len(all_summarizable),
@@ -137,9 +145,7 @@ def run_pipeline(
                 time.sleep(poll_interval)
                 continue
             with submitted_lock:
-                new_work = [
-                    v for v in ready if v in all_summarizable and v not in submitted
-                ]
+                new_work = [v for v in ready if v in all_summarizable and v not in submitted]
                 for v in new_work:
                     submitted.add(v)
             for v in new_work:
@@ -190,6 +196,48 @@ def run_pipeline(
     producer_done.set()
     poller_thread.join(timeout=poll_interval + 10)
     summarize_pool.shutdown(wait=True)
+
+    # -- Stage 3: scoring (optional) -------------------------------------------
+
+    enable_scoring = score_fn is not None and score_poll_fn is not None
+    if enable_scoring:
+        log.info("Pipeline: scoring stage starting.")
+        score_submitted: Set[str] = set()
+
+        # Run scoring in a single worker — calls are tiny (~100 tokens)
+        with ThreadPoolExecutor(max_workers=1) as score_pool:
+            score_futures: List[Future] = []
+
+            def _score_worker(vid: str) -> None:
+                vid_id, err = score_fn(vid)  # type: ignore[misc]
+                with result_lock:
+                    if err:
+                        result.score_errors += 1
+                    else:
+                        result.scored += 1
+                if score_progress is not None:
+                    score_progress.tick("Pipeline:Scoring", vid_id, error=err)
+
+            # Poll for all unscored summaries and score them
+            try:
+                unscored = score_poll_fn()  # type: ignore[misc]
+            except Exception:
+                log.debug("Score poll error", exc_info=True)
+                unscored = []
+
+            for vid in unscored:
+                if vid not in score_submitted:
+                    score_submitted.add(vid)
+                    score_futures.append(score_pool.submit(_score_worker, vid))
+
+            # Wait for all scoring to finish
+            for fut in score_futures:
+                try:
+                    fut.result()
+                except Exception:
+                    log.debug("Score future error", exc_info=True)
+
+        log.info("Pipeline: scoring done — %d scored, %d errors.", result.scored, result.score_errors)
 
     result.elapsed = time.monotonic() - t0
     return result

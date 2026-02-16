@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS summaries (
     prompt_id TEXT NOT NULL REFERENCES prompts(id),
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    quality_score REAL,
+    heuristic_score REAL,
+    llm_score REAL,
     UNIQUE(video_id, prompt_id)
 );
 
