@@ -1,4 +1,5 @@
 """Tests for R13: safe template filling with format_map."""
+
 from yt_artist.summarizer import _fill_template
 
 

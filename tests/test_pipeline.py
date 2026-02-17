@@ -1,17 +1,14 @@
 """Tests for pipeline parallelism (producer-consumer transcribe+summarize)."""
+
 from __future__ import annotations
 
 import sys
-import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from yt_artist.pipeline import PipelineResult, _split_concurrency, run_pipeline
 from yt_artist.storage import Storage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,12 +22,12 @@ def _make_store(tmp_path: Path) -> Storage:
     return store
 
 
-def _seed(store: Storage, n_videos: int = 5, n_transcripts: int = 0,
-          n_summaries: int = 0) -> list[str]:
+def _seed(store: Storage, n_videos: int = 5, n_transcripts: int = 0, n_summaries: int = 0) -> list[str]:
     """Seed one artist with n_videos. Returns list of video IDs."""
     aid = "@TestArtist"
     store.upsert_artist(
-        artist_id=aid, name="Test Artist",
+        artist_id=aid,
+        name="Test Artist",
         channel_url=f"https://www.youtube.com/{aid}",
         urllist_path=f"data/artists/{aid}/urllist.md",
     )
@@ -38,7 +35,8 @@ def _seed(store: Storage, n_videos: int = 5, n_transcripts: int = 0,
     for j in range(n_videos):
         vid = f"vid{j:05d}xxxxx"[:11]
         store.upsert_video(
-            video_id=vid, artist_id=aid,
+            video_id=vid,
+            artist_id=aid,
             url=f"https://www.youtube.com/watch?v={vid}",
             title=f"Video {j}",
         )
@@ -57,26 +55,32 @@ def _seed(store: Storage, n_videos: int = 5, n_transcripts: int = 0,
 
 def _make_transcribe_fn(store: Storage):
     """Build a transcribe_fn that writes a real transcript to the DB."""
+
     def fn(vid: str) -> tuple[str, str | None]:
         store.save_transcript(video_id=vid, raw_text=f"transcript for {vid}", format="vtt")
         return (vid, None)
+
     return fn
 
 
 def _make_summarize_fn(store: Storage, prompt_id: str = "p1"):
     """Build a summarize_fn that writes a real summary to the DB."""
+
     def fn(vid: str) -> tuple[str, str, str | None]:
         store.upsert_summary(video_id=vid, prompt_id=prompt_id, content=f"summary for {vid}")
         return (vid, f"{vid}:{prompt_id}", None)
+
     return fn
 
 
 def _make_poll_fn(store: Storage, all_ids: list[str], prompt_id: str = "p1"):
     """Build a poll_fn that queries the real DB."""
+
     def fn() -> list[str]:
         have_t = store.video_ids_with_transcripts(all_ids)
         have_s = store.video_ids_with_summary(all_ids, prompt_id)
         return [vid for vid in all_ids if vid in have_t and vid not in have_s]
+
     return fn
 
 
@@ -86,7 +90,6 @@ def _make_poll_fn(store: Storage, all_ids: list[str], prompt_id: str = "p1"):
 
 
 class TestSplitConcurrency:
-
     def test_split_concurrency_1(self):
         assert _split_concurrency(1) == (1, 1)
 
@@ -103,7 +106,6 @@ class TestSplitConcurrency:
 
 
 class TestPipelineHappyPath:
-
     def test_transcribe_and_summarize(self, tmp_path):
         """All videos need transcription + summarization."""
         store = _make_store(tmp_path)
@@ -173,7 +175,6 @@ class TestPipelineHappyPath:
 
 
 class TestPipelineErrors:
-
     def test_transcribe_error_no_block_summarize(self, tmp_path):
         """Transcribe error on 1/3 videos; the other 2 still get summarized."""
         store = _make_store(tmp_path)
@@ -241,7 +242,7 @@ class TestPipelineErrors:
 
         result = run_pipeline(
             video_ids_to_transcribe=vids[1:],  # 2 need transcription, all fail
-            video_ids_to_summarize=[vids[0]],   # 1 already transcribed
+            video_ids_to_summarize=[vids[0]],  # 1 already transcribed
             transcribe_fn=always_fail,
             summarize_fn=_make_summarize_fn(store),
             poll_fn=_make_poll_fn(store, vids),
@@ -260,7 +261,6 @@ class TestPipelineErrors:
 
 
 class TestPipelineProgress:
-
     def test_progress_tick_called(self, tmp_path):
         """tick() is called the correct number of times on both counters."""
         store = _make_store(tmp_path)
@@ -316,7 +316,6 @@ class TestPipelineProgress:
 
 
 class TestPipelineTermination:
-
     def test_terminates_when_all_done(self, tmp_path):
         """Pipeline returns within a reasonable time (not hung)."""
         store = _make_store(tmp_path)
@@ -365,7 +364,6 @@ class TestPipelineTermination:
 
 
 class TestPipelineDelay:
-
     def test_inter_delay_on_transcribe(self, tmp_path):
         """With inter_delay=0.05 and 3 videos, elapsed >= 0.1s (2 gaps)."""
         store = _make_store(tmp_path)
@@ -393,8 +391,10 @@ class TestPipelineDelay:
 def _run_cli(*args: str, db_path=None) -> int:
     """Call main() with patched sys.argv; return exit code."""
     import logging as _logging
+
     _logging.root.handlers.clear()
     from yt_artist.cli import main
+
     argv = ["yt-artist"]
     if db_path:
         argv += ["--db", str(db_path)]
@@ -408,7 +408,6 @@ def _run_cli(*args: str, db_path=None) -> int:
 
 
 class TestPipelineCLIIntegration:
-
     def test_bulk_summarize_missing_uses_pipeline(self, tmp_path, capfd):
         """When transcripts are missing, pipeline mode activates."""
         db = tmp_path / "test.db"
@@ -417,13 +416,18 @@ class TestPipelineCLIIntegration:
         _seed(store, n_videos=3, n_transcripts=0)
         store.upsert_prompt(prompt_id="p1", name="Test", template="Summarize: {video}")
 
-        with patch("yt_artist.cli.transcribe") as mock_t, \
-             patch("yt_artist.cli.summarize", return_value="vid:p1") as mock_s, \
-             patch("yt_artist.cli._check_llm"), \
-             patch("yt_artist.pipeline.run_pipeline") as mock_pipeline:
+        with (
+            patch("yt_artist.cli.transcribe") as mock_t,
+            patch("yt_artist.cli.summarize", return_value="vid:p1") as mock_s,
+            patch("yt_artist.cli._check_llm"),
+            patch("yt_artist.pipeline.run_pipeline") as mock_pipeline,
+        ):
             mock_pipeline.return_value = PipelineResult(
-                transcribed=3, transcribe_errors=0,
-                summarized=3, summarize_errors=0, elapsed=1.0,
+                transcribed=3,
+                transcribe_errors=0,
+                summarized=3,
+                summarize_errors=0,
+                elapsed=1.0,
             )
             code = _run_cli("summarize", "--artist-id", "@TestArtist", db_path=db)
 
@@ -441,9 +445,11 @@ class TestPipelineCLIIntegration:
         _seed(store, n_videos=3, n_transcripts=3)
         store.upsert_prompt(prompt_id="p1", name="Test", template="Summarize: {video}")
 
-        with patch("yt_artist.cli.summarize", return_value="vid:p1") as mock_s, \
-             patch("yt_artist.cli._check_llm"), \
-             patch("yt_artist.pipeline.run_pipeline") as mock_pipeline:
+        with (
+            patch("yt_artist.cli.summarize", return_value="vid:p1") as mock_s,
+            patch("yt_artist.cli._check_llm"),
+            patch("yt_artist.pipeline.run_pipeline") as mock_pipeline,
+        ):
             code = _run_cli("summarize", "--artist-id", "@TestArtist", db_path=db)
 
         assert code == 0

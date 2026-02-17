@@ -1,4 +1,5 @@
 """OpenAI-compatible LLM client; defaults to local Ollama when no API key is set."""
+
 from __future__ import annotations
 
 import logging
@@ -163,8 +164,9 @@ def complete(
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries and _is_transient(exc):
-                log.warning("LLM call failed (attempt %d/%d), retrying in %ds: %s",
-                            attempt + 1, max_retries + 1, backoff, exc)
+                log.warning(
+                    "LLM call failed (attempt %d/%d), retrying in %ds: %s", attempt + 1, max_retries + 1, backoff, exc
+                )
                 _time.sleep(backoff)
                 backoff = min(backoff * 2, 30)
                 continue
@@ -173,8 +175,7 @@ def complete(
             if _is_ollama(base_url):
                 log.error("LLM API call failed (Ollama at %s): %s", base_url, exc)
                 raise RuntimeError(
-                    f"LLM API call failed. Is Ollama running? Start with: ollama serve\n"
-                    f"Error: {exc}"
+                    f"LLM API call failed. Is Ollama running? Start with: ollama serve\nError: {exc}"
                 ) from exc
             log.error("LLM API call failed (%s): %s", base_url, exc)
             raise RuntimeError(f"LLM API call failed ({base_url}): {exc}") from exc

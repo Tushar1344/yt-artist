@@ -1,10 +1,10 @@
 """Tests for background job management: launch, list, attach, stop, cleanup, time estimates."""
+
 from __future__ import annotations
 
 import logging as _logging
 import os
 import sys
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,10 +12,10 @@ import pytest
 
 from yt_artist.storage import Storage
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_store(tmp_path: Path) -> Storage:
     db = tmp_path / "test.db"
@@ -27,6 +27,7 @@ def _make_store(tmp_path: Path) -> Storage:
 def _run_cli(*args: str, db_path: str | Path = "") -> int:
     """Call main() with patched sys.argv; return exit code (0 on success)."""
     from yt_artist.cli import main
+
     _logging.root.handlers.clear()
     argv = ["yt-artist"]
     if db_path:
@@ -40,11 +41,17 @@ def _run_cli(*args: str, db_path: str | Path = "") -> int:
             return exc.code if exc.code else 0
 
 
-def _seed_job(store: Storage, job_id: str = "abc123def456",
-              command: str = "transcribe --artist-id @Test",
-              status: str = "running", pid: int = 99999,
-              log_file: str = "/tmp/test.log",
-              total: int = 10, done: int = 3, errors: int = 0) -> None:
+def _seed_job(
+    store: Storage,
+    job_id: str = "abc123def456",
+    command: str = "transcribe --artist-id @Test",
+    status: str = "running",
+    pid: int = 99999,
+    log_file: str = "/tmp/test.log",
+    total: int = 10,
+    done: int = 3,
+    errors: int = 0,
+) -> None:
     """Insert a job row directly for testing."""
     conn = store._conn()
     try:
@@ -62,10 +69,11 @@ def _seed_job(store: Storage, job_id: str = "abc123def456",
 # Time estimation
 # ---------------------------------------------------------------------------
 
-class TestTimeEstimation:
 
+class TestTimeEstimation:
     def test_estimate_time_transcribe(self):
         from yt_artist.jobs import estimate_time
+
         est = estimate_time(10, "transcribe", concurrency=1)
         assert est > 0
         # 10 videos * (8s + 2s delay) / 1 worker = 100s
@@ -73,12 +81,14 @@ class TestTimeEstimation:
 
     def test_estimate_time_summarize(self):
         from yt_artist.jobs import estimate_time
+
         est = estimate_time(10, "summarize", concurrency=1)
         # 10 * (15s + 2s) / 1 = 170s
         assert est == pytest.approx(170.0)
 
     def test_estimate_time_with_concurrency(self):
         from yt_artist.jobs import estimate_time
+
         est1 = estimate_time(10, "transcribe", concurrency=1)
         est2 = estimate_time(10, "transcribe", concurrency=2)
         assert est2 < est1
@@ -86,14 +96,17 @@ class TestTimeEstimation:
 
     def test_format_estimate_seconds(self):
         from yt_artist.jobs import format_estimate
+
         assert format_estimate(45) == "45s"
 
     def test_format_estimate_minutes(self):
         from yt_artist.jobs import format_estimate
+
         assert format_estimate(180) == "3m"
 
     def test_format_estimate_hours(self):
         from yt_artist.jobs import format_estimate
+
         assert format_estimate(5400) == "1.5h"
 
 
@@ -101,15 +114,17 @@ class TestTimeEstimation:
 # Job ID generation
 # ---------------------------------------------------------------------------
 
-class TestJobId:
 
+class TestJobId:
     def test_unique_ids(self):
         from yt_artist.jobs import _generate_job_id
+
         ids = {_generate_job_id() for _ in range(100)}
         assert len(ids) == 100  # All unique
 
     def test_id_length(self):
         from yt_artist.jobs import _generate_job_id
+
         jid = _generate_job_id()
         assert len(jid) == 12
         assert all(c in "0123456789abcdef" for c in jid)
@@ -119,19 +134,22 @@ class TestJobId:
 # PID alive check
 # ---------------------------------------------------------------------------
 
-class TestPidAlive:
 
+class TestPidAlive:
     def test_current_process_is_alive(self):
         from yt_artist.jobs import _is_pid_alive
+
         assert _is_pid_alive(os.getpid()) is True
 
     def test_dead_pid_not_alive(self):
         from yt_artist.jobs import _is_pid_alive
+
         # Use a very high PID unlikely to exist
         assert _is_pid_alive(4000000) is False
 
     def test_invalid_pid_not_alive(self):
         from yt_artist.jobs import _is_pid_alive
+
         assert _is_pid_alive(0) is False
         assert _is_pid_alive(-1) is False
 
@@ -140,16 +158,18 @@ class TestPidAlive:
 # Background suggestion hint
 # ---------------------------------------------------------------------------
 
-class TestBackgroundSuggestion:
 
+class TestBackgroundSuggestion:
     def test_below_threshold_no_output(self, capfd):
         from yt_artist.jobs import maybe_suggest_background
+
         maybe_suggest_background(3, "transcribe", 1, ["yt-artist", "transcribe", "--artist-id", "@X"])
         captured = capfd.readouterr()
         assert captured.err == ""
 
     def test_above_threshold_shows_hint(self, capfd):
         from yt_artist.jobs import maybe_suggest_background
+
         maybe_suggest_background(10, "transcribe", 1, ["yt-artist", "transcribe", "--artist-id", "@X"])
         captured = capfd.readouterr()
         assert "--bg" in captured.err
@@ -157,6 +177,7 @@ class TestBackgroundSuggestion:
 
     def test_quiet_suppresses_hint(self, capfd):
         from yt_artist.jobs import maybe_suggest_background
+
         maybe_suggest_background(10, "transcribe", 1, ["yt-artist", "transcribe", "--artist-id", "@X"], quiet=True)
         captured = capfd.readouterr()
         assert captured.err == ""
@@ -166,10 +187,11 @@ class TestBackgroundSuggestion:
 # DB: job CRUD
 # ---------------------------------------------------------------------------
 
-class TestJobDB:
 
+class TestJobDB:
     def test_create_and_list_job(self, tmp_path):
         from yt_artist.jobs import list_jobs
+
         store = _make_store(tmp_path)
         _seed_job(store, pid=os.getpid())  # use alive PID so it's not auto-staled
         rows = list_jobs(store)
@@ -180,7 +202,8 @@ class TestJobDB:
         assert rows[0]["done"] == 3
 
     def test_job_progress_update(self, tmp_path):
-        from yt_artist.jobs import update_job_progress, get_job
+        from yt_artist.jobs import get_job, update_job_progress
+
         store = _make_store(tmp_path)
         _seed_job(store, pid=os.getpid())
         update_job_progress(store, "abc123def456", done=7, errors=1)
@@ -190,6 +213,7 @@ class TestJobDB:
 
     def test_job_finalize(self, tmp_path):
         from yt_artist.jobs import finalize_job, get_job
+
         store = _make_store(tmp_path)
         _seed_job(store, pid=os.getpid())
         finalize_job(store, "abc123def456", status="completed")
@@ -199,6 +223,7 @@ class TestJobDB:
 
     def test_stale_pid_auto_detected(self, tmp_path):
         from yt_artist.jobs import list_jobs
+
         store = _make_store(tmp_path)
         # Use a dead PID
         _seed_job(store, pid=4000000)
@@ -209,6 +234,7 @@ class TestJobDB:
 
     def test_job_prefix_match(self, tmp_path):
         from yt_artist.jobs import get_job
+
         store = _make_store(tmp_path)
         _seed_job(store, job_id="abc123def456", pid=os.getpid())
         # Prefix match with first 8 chars
@@ -218,6 +244,7 @@ class TestJobDB:
 
     def test_job_cleanup_removes_old(self, tmp_path):
         from yt_artist.jobs import cleanup_old_jobs
+
         store = _make_store(tmp_path)
         # Insert a finished job with finished_at in the past
         log_path = tmp_path / "old.log"
@@ -241,11 +268,12 @@ class TestJobDB:
 # _ProgressCounter integration
 # ---------------------------------------------------------------------------
 
-class TestProgressCounterDB:
 
+class TestProgressCounterDB:
     def test_counter_updates_job_db(self, tmp_path):
         from yt_artist.cli import _ProgressCounter
         from yt_artist.jobs import get_job
+
         store = _make_store(tmp_path)
         _seed_job(store, pid=os.getpid(), total=0, done=0)
         pc = _ProgressCounter(5, job_id="abc123def456", job_storage=store)
@@ -259,6 +287,7 @@ class TestProgressCounterDB:
     def test_counter_finalize_sets_status(self, tmp_path):
         from yt_artist.cli import _ProgressCounter
         from yt_artist.jobs import get_job
+
         store = _make_store(tmp_path)
         _seed_job(store, pid=os.getpid())
         pc = _ProgressCounter(5, job_id="abc123def456", job_storage=store)
@@ -270,6 +299,7 @@ class TestProgressCounterDB:
     def test_counter_no_db_without_job_id(self, tmp_path):
         """Without job_id, ProgressCounter should not write to DB."""
         from yt_artist.cli import _ProgressCounter
+
         store = _make_store(tmp_path)
         pc = _ProgressCounter(3)
         pc.tick("Test", "vid1")
@@ -290,8 +320,8 @@ class TestProgressCounterDB:
 # CLI integration: --bg flag
 # ---------------------------------------------------------------------------
 
-class TestBGFlagLaunch:
 
+class TestBGFlagLaunch:
     def test_bg_flag_launches_subprocess(self, tmp_path, capfd):
         """When --bg is passed, main() should call launch_background and exit."""
         db = tmp_path / "test.db"
@@ -306,6 +336,7 @@ class TestBGFlagLaunch:
     def test_bg_worker_flag_sets_globals(self, tmp_path, capfd):
         """When --_bg-worker is passed, _bg_job_id should be set."""
         import yt_artist.cli as cli_mod
+
         db = tmp_path / "test.db"
         store = Storage(db)
         store.ensure_schema()
@@ -319,10 +350,10 @@ class TestBGFlagLaunch:
 
         _logging.root.handlers.clear()
         argv = ["yt-artist", "--db", str(db), "--_bg-worker", "testworker123", "quickstart"]
-        with patch.object(sys, "argv", argv), \
-             patch("yt_artist.cli._cmd_quickstart", side_effect=fake_func):
+        with patch.object(sys, "argv", argv), patch("yt_artist.cli._cmd_quickstart", side_effect=fake_func):
             try:
                 from yt_artist.cli import main
+
                 main()
             except SystemExit:
                 pass
@@ -336,8 +367,8 @@ class TestBGFlagLaunch:
 # CLI integration: jobs subcommand
 # ---------------------------------------------------------------------------
 
-class TestJobsCommand:
 
+class TestJobsCommand:
     def test_jobs_list_empty(self, tmp_path, capfd):
         """'yt-artist jobs' with no jobs should show a message."""
         db = tmp_path / "test.db"
@@ -376,6 +407,7 @@ class TestJobsCommand:
     def test_jobs_stop_sends_sigterm(self, tmp_path, capfd):
         """'jobs stop' should call os.kill with SIGTERM (after alive check with signal 0)."""
         import signal as _sig
+
         db = tmp_path / "test.db"
         store = Storage(db)
         store.ensure_schema()
@@ -450,8 +482,8 @@ class TestJobsCommand:
 # Schema migration
 # ---------------------------------------------------------------------------
 
-class TestJobsMigration:
 
+class TestJobsMigration:
     def test_jobs_table_created_on_fresh_db(self, tmp_path):
         """ensure_schema() should create the jobs table."""
         store = _make_store(tmp_path)

@@ -1,9 +1,9 @@
 """Tests for summarizer: mock LLM response; assert Summary row and placeholder substitution."""
+
 from unittest.mock import patch
 
 import pytest
 
-from yt_artist import storage
 from yt_artist.summarizer import _fill_template, summarize
 
 
@@ -47,7 +47,7 @@ def test_summarize_saves_to_db(store):
         template="Summarize for {audience}. Video: {video}. Artist: {artist}.",
     )
 
-    with patch("yt_artist.summarizer.complete", return_value="This is the summary."):
+    with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="This is the summary."):
         out = summarize("sv1", "p1", store)
 
     assert out == "sv1:p1"
@@ -74,7 +74,7 @@ def test_summarize_overwrites_same_video_prompt(store):
     store.upsert_prompt(prompt_id="p2", name="P2", template="Sum: {video}")
     store.upsert_summary(video_id="sv2", prompt_id="p2", content="First.")
 
-    with patch("yt_artist.summarizer.complete", return_value="Second summary."):
+    with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="Second summary."):
         summarize("sv2", "p2", store)
 
     rows = store.get_summaries_for_video("sv2")

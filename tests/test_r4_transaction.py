@@ -1,5 +1,5 @@
 """Tests for R4: Storage.transaction() context manager."""
-import sqlite3
+
 
 import pytest
 
@@ -33,13 +33,12 @@ def test_transaction_commits_on_success(tmp_path):
 def test_transaction_rolls_back_on_error(tmp_path):
     """If an exception occurs inside transaction(), everything is rolled back."""
     store = _make_store(tmp_path)
-    with pytest.raises(RuntimeError, match="boom"):
-        with store.transaction() as conn:
-            conn.execute(
-                "INSERT INTO artists (id, name, channel_url, urllist_path) VALUES (?, ?, ?, ?)",
-                ("@rollback", "Rollback", "https://example.com", "path.md"),
-            )
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"), store.transaction() as conn:
+        conn.execute(
+            "INSERT INTO artists (id, name, channel_url, urllist_path) VALUES (?, ?, ?, ?)",
+            ("@rollback", "Rollback", "https://example.com", "path.md"),
+        )
+        raise RuntimeError("boom")
     # Artist should NOT exist (rolled back)
     assert store.get_artist("@rollback") is None
 

@@ -1,4 +1,5 @@
 """Tests for R8: Empty LLM responses must not be persisted as summaries."""
+
 from unittest.mock import patch
 
 import pytest
@@ -32,7 +33,7 @@ def test_empty_llm_response_raises(store):
     """LLM returning empty string must raise ValueError, not persist."""
     _setup_video_with_transcript(store)
 
-    with patch("yt_artist.summarizer.complete", return_value=""):
+    with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value=""):
         with pytest.raises(ValueError, match="empty summary"):
             summarize("ev1", "p_empty", store)
 
@@ -41,7 +42,7 @@ def test_whitespace_llm_response_raises(store):
     """LLM returning only whitespace must raise ValueError."""
     _setup_video_with_transcript(store)
 
-    with patch("yt_artist.summarizer.complete", return_value="   \n  \t  "):
+    with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="   \n  \t  "):
         with pytest.raises(ValueError, match="empty summary"):
             summarize("ev1", "p_empty", store)
 
@@ -50,9 +51,8 @@ def test_no_summary_persisted_on_empty(store):
     """After empty-response ValueError, no summary row should exist in DB."""
     _setup_video_with_transcript(store)
 
-    with patch("yt_artist.summarizer.complete", return_value=""):
-        with pytest.raises(ValueError):
-            summarize("ev1", "p_empty", store)
+    with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value=""), pytest.raises(ValueError):
+        summarize("ev1", "p_empty", store)
 
     rows = store.get_summaries_for_video("ev1")
     assert len(rows) == 0

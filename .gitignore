@@ -43,6 +43,9 @@ env/
 # AI tool configs — personal overrides only (shared configs committed)
 .claude/settings.local.json
 
+# BAML auto-generated client (regenerate with: baml-cli generate)
+baml_client/
+
 # Testing
 .pytest_cache/
 .coverage

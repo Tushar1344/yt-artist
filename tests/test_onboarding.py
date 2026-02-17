@@ -1,4 +1,5 @@
 """Tests for guided onboarding: --quiet flag, next-step hints, quickstart, first-run detection."""
+
 from __future__ import annotations
 
 import logging as _logging
@@ -6,15 +7,13 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from yt_artist.cli import main
 from yt_artist.storage import Storage
-
 
 # ---------------------------------------------------------------------------
 # Helpers (same pattern as test_cli.py)
 # ---------------------------------------------------------------------------
+
 
 def _make_store(tmp_path: Path) -> Storage:
     db = tmp_path / "test.db"
@@ -40,7 +39,8 @@ def _run_cli(*args: str, db_path: str | Path = "") -> int:
 
 def _seed_artist(store: Storage, artist_id: str = "@TestCh") -> None:
     store.upsert_artist(
-        artist_id=artist_id, name="Test Channel",
+        artist_id=artist_id,
+        name="Test Channel",
         channel_url=f"https://www.youtube.com/{artist_id}",
         urllist_path=f"data/artists/{artist_id}/urllist.md",
     )
@@ -48,8 +48,10 @@ def _seed_artist(store: Storage, artist_id: str = "@TestCh") -> None:
 
 def _seed_video(store: Storage, video_id: str = "testvid00001", artist_id: str = "@TestCh") -> None:
     store.upsert_video(
-        video_id=video_id, artist_id=artist_id,
-        url=f"https://www.youtube.com/watch?v={video_id}", title="Test Video",
+        video_id=video_id,
+        artist_id=artist_id,
+        url=f"https://www.youtube.com/watch?v={video_id}",
+        title="Test Video",
     )
 
 
@@ -57,8 +59,8 @@ def _seed_video(store: Storage, video_id: str = "testvid00001", artist_id: str =
 # --quiet flag
 # ---------------------------------------------------------------------------
 
-class TestQuietFlag:
 
+class TestQuietFlag:
     def test_quiet_suppresses_hints(self, tmp_path, capfd):
         """With -q, no hint text should appear in stderr after fetch-channel."""
         db = tmp_path / "test.db"
@@ -83,8 +85,8 @@ class TestQuietFlag:
 # Hints: fetch-channel
 # ---------------------------------------------------------------------------
 
-class TestFetchChannelHints:
 
+class TestFetchChannelHints:
     def test_hint_suggests_transcribe_with_artist_id(self, tmp_path, capfd):
         """After fetch-channel, hint should suggest transcribe --artist-id."""
         db = tmp_path / "test.db"
@@ -113,8 +115,8 @@ class TestFetchChannelHints:
 # Hints: transcribe
 # ---------------------------------------------------------------------------
 
-class TestTranscribeHints:
 
+class TestTranscribeHints:
     def test_single_video_hint_suggests_summarize(self, tmp_path, capfd):
         """After single-video transcribe, hint should suggest summarize."""
         db = tmp_path / "test.db"
@@ -137,8 +139,10 @@ class TestTranscribeHints:
             storage.save_transcript(video_id=vid, raw_text="Text", format="vtt")
             return vid
 
-        with patch("yt_artist.cli.transcribe", side_effect=fake_transcribe), \
-             patch("yt_artist.cli.get_inter_video_delay", return_value=0):
+        with (
+            patch("yt_artist.cli.transcribe", side_effect=fake_transcribe),
+            patch("yt_artist.cli.get_inter_video_delay", return_value=0),
+        ):
             code = _run_cli("transcribe", "--artist-id", "@TestCh", db_path=db)
         assert code == 0
         captured = capfd.readouterr()
@@ -149,8 +153,8 @@ class TestTranscribeHints:
 # Hints: summarize
 # ---------------------------------------------------------------------------
 
-class TestSummarizeHints:
 
+class TestSummarizeHints:
     def test_single_video_hint_suggests_bulk(self, tmp_path, capfd):
         """After single-video summarize, hint should suggest bulk summarize."""
         db = tmp_path / "test.db"
@@ -160,9 +164,11 @@ class TestSummarizeHints:
         _seed_video(store)
         store.save_transcript(video_id="testvid00001", raw_text="Hello", format="vtt")
 
-        with patch("yt_artist.cli.summarize", return_value="testvid00001:default") as mock_sum, \
-             patch("yt_artist.cli.ensure_artist_and_video_for_video_url", return_value=("@TestCh", "testvid00001")), \
-             patch("yt_artist.cli._check_llm"):
+        with (
+            patch("yt_artist.cli.summarize", return_value="testvid00001:default") as mock_sum,
+            patch("yt_artist.cli.ensure_artist_and_video_for_video_url", return_value=("@TestCh", "testvid00001")),
+            patch("yt_artist.cli._check_llm"),
+        ):
             # Mock get_summaries_for_video
             original_get = store.get_summaries_for_video
 
@@ -184,8 +190,7 @@ class TestSummarizeHints:
         _seed_video(store)
         store.save_transcript(video_id="testvid00001", raw_text="Hello", format="vtt")
 
-        with patch("yt_artist.cli.summarize", return_value="testvid00001:default"), \
-             patch("yt_artist.cli._check_llm"):
+        with patch("yt_artist.cli.summarize", return_value="testvid00001:default"), patch("yt_artist.cli._check_llm"):
             code = _run_cli("summarize", "--artist-id", "@TestCh", db_path=db)
         assert code == 0
         captured = capfd.readouterr()
@@ -196,14 +201,19 @@ class TestSummarizeHints:
 # Hints: other commands
 # ---------------------------------------------------------------------------
 
-class TestOtherCommandHints:
 
+class TestOtherCommandHints:
     def test_add_prompt_hint(self, tmp_path, capfd):
         """After add-prompt, hint should suggest set-default-prompt."""
         db = tmp_path / "test.db"
         code = _run_cli(
-            "add-prompt", "--id", "my-p", "--name", "My Prompt",
-            "--template", "Summarize: {video}",
+            "add-prompt",
+            "--id",
+            "my-p",
+            "--name",
+            "My Prompt",
+            "--template",
+            "Summarize: {video}",
             db_path=db,
         )
         assert code == 0
@@ -260,8 +270,8 @@ class TestOtherCommandHints:
 # quickstart subcommand
 # ---------------------------------------------------------------------------
 
-class TestQuickstart:
 
+class TestQuickstart:
     def test_prints_all_steps(self, tmp_path, capfd):
         """quickstart should print STEP 1/2/3 with @TED commands."""
         db = tmp_path / "test.db"
@@ -298,8 +308,8 @@ class TestQuickstart:
 # First-run detection
 # ---------------------------------------------------------------------------
 
-class TestFirstRunDetection:
 
+class TestFirstRunDetection:
     def test_empty_db_shows_quickstart_tip(self, tmp_path, capfd):
         """On first use with empty DB, stderr should mention quickstart."""
         db = tmp_path / "test.db"
@@ -343,8 +353,8 @@ class TestFirstRunDetection:
 # Hint output goes to stderr (not stdout)
 # ---------------------------------------------------------------------------
 
-class TestQuickstartAuth:
 
+class TestQuickstartAuth:
     def test_quickstart_mentions_auth(self, tmp_path, capfd):
         """quickstart should mention PO token / YouTube authentication."""
         db = tmp_path / "test.db"
@@ -364,7 +374,6 @@ class TestQuickstartAuth:
 
 
 class TestFirstRunMentionsDoctor:
-
     def test_first_run_mentions_doctor(self, tmp_path, capfd):
         """On first use with empty DB, stderr should mention doctor."""
         db = tmp_path / "test.db"
@@ -375,7 +384,6 @@ class TestFirstRunMentionsDoctor:
 
 
 class TestHintOutputChannel:
-
     def test_hints_go_to_stderr_not_stdout(self, tmp_path, capfd):
         """Hints should appear in stderr, not pollute stdout."""
         db = tmp_path / "test.db"

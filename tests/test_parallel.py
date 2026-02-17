@@ -1,11 +1,10 @@
 """Tests for parallel execution, batch DB queries, and rate-limit safety."""
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from yt_artist.storage import Storage
 
@@ -20,15 +19,17 @@ def _make_store(tmp_path: Path) -> Storage:
 def _seed_full(store: Storage, n_videos: int = 5) -> list[str]:
     """Seed artist + N videos, return video IDs."""
     store.upsert_artist(
-        artist_id="@Bulk", name="Bulk Artist",
+        artist_id="@Bulk",
+        name="Bulk Artist",
         channel_url="https://www.youtube.com/@Bulk",
         urllist_path="data/artists/@Bulk/urllist.md",
     )
     ids = []
     for i in range(n_videos):
         vid = f"bulkvid{i:05d}"
-        store.upsert_video(video_id=vid, artist_id="@Bulk",
-                           url=f"https://www.youtube.com/watch?v={vid}", title=f"Video {i}")
+        store.upsert_video(
+            video_id=vid, artist_id="@Bulk", url=f"https://www.youtube.com/watch?v={vid}", title=f"Video {i}"
+        )
         ids.append(vid)
     return ids
 
@@ -37,8 +38,8 @@ def _seed_full(store: Storage, n_videos: int = 5) -> list[str]:
 # Batch DB queries
 # ---------------------------------------------------------------------------
 
-class TestBatchDBQueries:
 
+class TestBatchDBQueries:
     def test_video_ids_with_transcripts(self, tmp_path):
         store = _make_store(tmp_path)
         ids = _seed_full(store, 5)
@@ -86,10 +87,11 @@ class TestBatchDBQueries:
 # _ProgressCounter
 # ---------------------------------------------------------------------------
 
-class TestProgressCounter:
 
+class TestProgressCounter:
     def test_basic_counting(self):
         from yt_artist.cli import _ProgressCounter
+
         pc = _ProgressCounter(5)
         pc.tick("Test", "vid1")
         pc.tick("Test", "vid2", error="fail")
@@ -101,25 +103,28 @@ class TestProgressCounter:
 # Parallel transcribe — verifies concurrency > 1 processes all videos
 # ---------------------------------------------------------------------------
 
-class TestBulkTranscribeConcurrency:
 
+class TestBulkTranscribeConcurrency:
     def test_bulk_transcribe_parallel_all_succeed(self, tmp_path, capfd):
         """With --concurrency 2, all videos should be transcribed."""
         import logging as _logging
+
         from yt_artist.cli import main
 
         db = tmp_path / "test.db"
         store = Storage(db)
         store.ensure_schema()
         store.upsert_artist(
-            artist_id="@Test", name="Test",
+            artist_id="@Test",
+            name="Test",
             channel_url="https://www.youtube.com/@Test",
             urllist_path="data/artists/@Test/urllist.md",
         )
         for i in range(3):
             vid = f"vid{i:09d}"
-            store.upsert_video(video_id=vid, artist_id="@Test",
-                               url=f"https://www.youtube.com/watch?v={vid}", title=f"V{i}")
+            store.upsert_video(
+                video_id=vid, artist_id="@Test", url=f"https://www.youtube.com/watch?v={vid}", title=f"V{i}"
+            )
 
         call_count = {"n": 0}
 
@@ -131,9 +136,11 @@ class TestBulkTranscribeConcurrency:
 
         _logging.root.handlers.clear()
         argv = ["yt-artist", "--db", str(db), "--concurrency", "2", "transcribe", "--artist-id", "@Test"]
-        with patch.object(sys, "argv", argv), \
-             patch("yt_artist.cli.transcribe", side_effect=fake_transcribe), \
-             patch("yt_artist.cli.get_inter_video_delay", return_value=0):
+        with (
+            patch.object(sys, "argv", argv),
+            patch("yt_artist.cli.transcribe", side_effect=fake_transcribe),
+            patch("yt_artist.cli.get_inter_video_delay", return_value=0),
+        ):
             main()
 
         captured = capfd.readouterr()
@@ -143,20 +150,23 @@ class TestBulkTranscribeConcurrency:
     def test_bulk_transcribe_handles_errors(self, tmp_path, capfd):
         """Errors in individual videos should not abort the batch."""
         import logging as _logging
+
         from yt_artist.cli import main
 
         db = tmp_path / "test.db"
         store = Storage(db)
         store.ensure_schema()
         store.upsert_artist(
-            artist_id="@Test", name="Test",
+            artist_id="@Test",
+            name="Test",
             channel_url="https://www.youtube.com/@Test",
             urllist_path="data/artists/@Test/urllist.md",
         )
         for i in range(2):
             vid = f"vid{i:09d}"
-            store.upsert_video(video_id=vid, artist_id="@Test",
-                               url=f"https://www.youtube.com/watch?v={vid}", title=f"V{i}")
+            store.upsert_video(
+                video_id=vid, artist_id="@Test", url=f"https://www.youtube.com/watch?v={vid}", title=f"V{i}"
+            )
 
         def fail_first(url, storage, **kw):
             vid = url.split("=")[-1]
@@ -167,9 +177,11 @@ class TestBulkTranscribeConcurrency:
 
         _logging.root.handlers.clear()
         argv = ["yt-artist", "--db", str(db), "transcribe", "--artist-id", "@Test"]
-        with patch.object(sys, "argv", argv), \
-             patch("yt_artist.cli.transcribe", side_effect=fail_first), \
-             patch("yt_artist.cli.get_inter_video_delay", return_value=0):
+        with (
+            patch.object(sys, "argv", argv),
+            patch("yt_artist.cli.transcribe", side_effect=fail_first),
+            patch("yt_artist.cli.get_inter_video_delay", return_value=0),
+        ):
             main()
 
         captured = capfd.readouterr()
@@ -181,8 +193,8 @@ class TestBulkTranscribeConcurrency:
 # Optimistic English download + metadata-informed fallback
 # ---------------------------------------------------------------------------
 
-class TestOptimisticSubtitleDownload:
 
+class TestOptimisticSubtitleDownload:
     def test_optimistic_english_success_skips_lang_detection(self, tmp_path):
         """When optimistic English download succeeds, _get_available_sub_langs is not called."""
         from yt_artist.transcriber import _run_yt_dlp_subtitles
@@ -196,8 +208,10 @@ class TestOptimisticSubtitleDownload:
             f.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello world\n", encoding="utf-8")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run), \
-             patch("yt_artist.transcriber._get_available_sub_langs") as mock_langs:
+        with (
+            patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run),
+            patch("yt_artist.transcriber._get_available_sub_langs") as mock_langs,
+        ):
             text, fmt = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
 
         assert text == "Hello world"
@@ -221,8 +235,10 @@ class TestOptimisticSubtitleDownload:
                 f.write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHola mundo\n", encoding="utf-8")
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run), \
-             patch("yt_artist.transcriber._get_available_sub_langs", return_value=["es"]):
+        with (
+            patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run),
+            patch("yt_artist.transcriber._get_available_sub_langs", return_value=["es"]),
+        ):
             text, fmt = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
 
         assert "Hola mundo" in text
@@ -247,8 +263,11 @@ class TestOptimisticSubtitleDownload:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         import yt_artist.transcriber as _mod
-        with patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run), \
-             patch.object(_mod._time, "sleep") as mock_sleep:
+
+        with (
+            patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run),
+            patch.object(_mod._time, "sleep") as mock_sleep,
+        ):
             text, fmt = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
 
         assert text == "Hello"
@@ -258,6 +277,7 @@ class TestOptimisticSubtitleDownload:
     def test_rate_limit_detection(self):
         """_is_rate_limited detects 429 and rate limit patterns."""
         from yt_artist.transcriber import _is_rate_limited
+
         assert _is_rate_limited("HTTP Error 429: Too Many Requests")
         assert _is_rate_limited("ERROR: rate limit exceeded")
         assert _is_rate_limited("too many requests from your IP")

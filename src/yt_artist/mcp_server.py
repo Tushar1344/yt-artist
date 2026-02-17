@@ -1,4 +1,5 @@
 """MCP server: tools fetch_channel, transcribe_video, summarize_video, list_artists, list_videos."""
+
 from __future__ import annotations
 
 import logging
@@ -57,6 +58,7 @@ def run_mcp_server() -> None:
         artist_id = None
         if write_file:
             from yt_artist.transcriber import extract_video_id
+
             vid = extract_video_id(video_url_or_id)
             v = storage.get_video(vid)
             artist_id = v["artist_id"] if v else None
@@ -101,7 +103,11 @@ def run_mcp_server() -> None:
         """List videos, optionally filtered by artist_id."""
         storage = storage_factory()
         videos = storage.list_videos(artist_id=artist_id)
-        return {"videos": [{"id": v["id"], "artist_id": v["artist_id"], "title": v["title"], "url": v["url"]} for v in videos]}
+        return {
+            "videos": [
+                {"id": v["id"], "artist_id": v["artist_id"], "title": v["title"], "url": v["url"]} for v in videos
+            ]
+        }
 
     mcp.run(transport="stdio")
 

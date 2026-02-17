@@ -404,6 +404,9 @@ def main() -> None:
     p_score.add_argument(
         "--skip-llm", action="store_true", default=False, help="Skip LLM scoring (heuristic only, faster)"
     )
+    p_score.add_argument(
+        "--verify", action="store_true", default=False, help="Run claim verification (1 extra LLM call per summary)"
+    )
     p_score.set_defaults(func=_cmd_score)
 
     # status: project overview
@@ -1303,7 +1306,11 @@ def _cmd_score(args: argparse.Namespace, storage: Storage, data_dir: Path) -> No
         return
 
     skip_llm = getattr(args, "skip_llm", False)
-    print(f"Scoring {len(to_score)} summaries for {artist_id} (prompt={prompt_id}, llm={'off' if skip_llm else 'on'})…")
+    do_verify = getattr(args, "verify", False)
+    mode_parts = [f"llm={'off' if skip_llm else 'on'}"]
+    if do_verify:
+        mode_parts.append("verify=on")
+    print(f"Scoring {len(to_score)} summaries for {artist_id} (prompt={prompt_id}, {', '.join(mode_parts)})…")
     scored = 0
     errors = 0
     for row in to_score:
@@ -1313,11 +1320,16 @@ def _cmd_score(args: argparse.Namespace, storage: Storage, data_dir: Path) -> No
                 row["prompt_id"],
                 storage,
                 skip_llm=skip_llm,
+                verify=do_verify,
             )
             if result:
                 scored += 1
                 q = result["quality_score"]
-                print(f"  {row['video_id']}: quality={q:.2f}")
+                f = result.get("faithfulness_score")
+                v = result.get("verification_score")
+                marker = " [!LOW FAITHFULNESS]" if f is not None and f <= 0.4 else ""
+                verified_str = f" verified={v:.0%}" if v is not None else ""
+                print(f"  {row['video_id']}: quality={q:.2f}{verified_str}{marker}")
             else:
                 errors += 1
         except Exception as exc:

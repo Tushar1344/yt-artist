@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS summaries (
     quality_score REAL,
     heuristic_score REAL,
     llm_score REAL,
+    faithfulness_score REAL,
+    verification_score REAL,
     UNIQUE(video_id, prompt_id)
 );
 

@@ -1,18 +1,14 @@
 """Tests for rate-limit monitoring: request logging, counting, and warnings."""
+
 from __future__ import annotations
 
-import sys
-from io import StringIO
-
-import pytest
-
 from yt_artist.rate_limit import (
-    WARN_THRESHOLD_1H,
     HIGH_THRESHOLD_1H,
-    log_request,
+    WARN_THRESHOLD_1H,
+    check_rate_warning,
     count_requests,
     get_rate_status,
-    check_rate_warning,
+    log_request,
 )
 from yt_artist.storage import Storage
 
@@ -27,8 +23,8 @@ def _make_store(tmp_path):
 # log_request + count_requests
 # ---------------------------------------------------------------------------
 
-class TestLogRequest:
 
+class TestLogRequest:
     def test_log_request_inserts_row(self, tmp_path):
         """log_request inserts a row with the correct request_type."""
         store = _make_store(tmp_path)
@@ -68,19 +64,14 @@ class TestLogRequest:
         try:
             # Insert a row from 2 hours ago
             conn.execute(
-                "INSERT INTO request_log (timestamp, request_type) "
-                "VALUES (datetime('now', '-2 hours'), 'old')"
+                "INSERT INTO request_log (timestamp, request_type) VALUES (datetime('now', '-2 hours'), 'old')"
             )
             # Insert a row from 30 minutes ago (within 1 hour)
             conn.execute(
-                "INSERT INTO request_log (timestamp, request_type) "
-                "VALUES (datetime('now', '-30 minutes'), 'recent')"
+                "INSERT INTO request_log (timestamp, request_type) VALUES (datetime('now', '-30 minutes'), 'recent')"
             )
             # Insert a current row
-            conn.execute(
-                "INSERT INTO request_log (timestamp, request_type) "
-                "VALUES (datetime('now'), 'now')"
-            )
+            conn.execute("INSERT INTO request_log (timestamp, request_type) VALUES (datetime('now'), 'now')")
             conn.commit()
         finally:
             conn.close()
@@ -97,8 +88,7 @@ class TestLogRequest:
             # Insert rows from 25 hours ago
             for _ in range(5):
                 conn.execute(
-                    "INSERT INTO request_log (timestamp, request_type) "
-                    "VALUES (datetime('now', '-25 hours'), 'old')"
+                    "INSERT INTO request_log (timestamp, request_type) VALUES (datetime('now', '-25 hours'), 'old')"
                 )
             conn.commit()
         finally:
@@ -121,8 +111,8 @@ class TestLogRequest:
 # get_rate_status
 # ---------------------------------------------------------------------------
 
-class TestGetRateStatus:
 
+class TestGetRateStatus:
     def test_no_requests(self, tmp_path):
         """Returns zeros and no warning when table is empty."""
         store = _make_store(tmp_path)
@@ -178,8 +168,8 @@ class TestGetRateStatus:
 # check_rate_warning
 # ---------------------------------------------------------------------------
 
-class TestCheckRateWarning:
 
+class TestCheckRateWarning:
     def test_prints_warning_to_stderr(self, tmp_path, capfd):
         """Warning printed to stderr when rate is high."""
         store = _make_store(tmp_path)
@@ -221,16 +211,14 @@ class TestCheckRateWarning:
 # Migration
 # ---------------------------------------------------------------------------
 
-class TestMigration:
 
+class TestMigration:
     def test_migration_creates_request_log_table(self, tmp_path):
         """ensure_schema() creates the request_log table."""
         store = _make_store(tmp_path)
         conn = store._conn()
         try:
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'"
-            )
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'")
             assert cur.fetchone() is not None
         finally:
             conn.close()
@@ -242,9 +230,7 @@ class TestMigration:
         # Should not raise
         conn = store._conn()
         try:
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'"
-            )
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='request_log'")
             assert cur.fetchone() is not None
         finally:
             conn.close()

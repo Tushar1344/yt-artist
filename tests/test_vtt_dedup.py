@@ -1,4 +1,5 @@
 """Tests for VTT subtitle deduplication in _subs_to_plain_text."""
+
 from yt_artist.transcriber import _subs_to_plain_text
 
 

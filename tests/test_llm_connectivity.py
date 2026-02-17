@@ -1,13 +1,13 @@
 """Tests for LLM connectivity check and retry logic."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yt_artist.llm import check_connectivity, complete, _is_transient
+from yt_artist.llm import _is_transient, check_connectivity, complete
 
 
 class TestCheckConnectivity:
-
     def test_reachable_endpoint_passes(self):
         """check_connectivity should not raise when the endpoint is reachable."""
         with patch("yt_artist.llm.socket.create_connection") as mock_conn:
@@ -16,15 +16,19 @@ class TestCheckConnectivity:
 
     def test_unreachable_ollama_gives_actionable_error(self):
         """When Ollama is configured but unreachable, error should mention 'ollama serve'."""
-        with patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")), \
-             patch("yt_artist.llm.socket.create_connection", side_effect=OSError("Connection refused")):
+        with (
+            patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
+            patch("yt_artist.llm.socket.create_connection", side_effect=OSError("Connection refused")),
+        ):
             with pytest.raises(RuntimeError, match="ollama serve"):
                 check_connectivity()
 
     def test_unreachable_remote_gives_generic_error(self):
         """When a non-Ollama endpoint is unreachable, error should mention the URL."""
-        with patch("yt_artist.llm._resolve_config", return_value=("https://api.openai.com/v1", "sk-xxx", "gpt-4o-mini")), \
-             patch("yt_artist.llm.socket.create_connection", side_effect=OSError("Connection refused")):
+        with (
+            patch("yt_artist.llm._resolve_config", return_value=("https://api.openai.com/v1", "sk-xxx", "gpt-4o-mini")),
+            patch("yt_artist.llm.socket.create_connection", side_effect=OSError("Connection refused")),
+        ):
             with pytest.raises(RuntimeError, match="api.openai.com"):
                 check_connectivity()
 
@@ -33,8 +37,8 @@ class TestCheckConnectivity:
 # _is_transient classification
 # ---------------------------------------------------------------------------
 
-class TestIsTransient:
 
+class TestIsTransient:
     def test_connection_error_is_transient(self):
         assert _is_transient(ConnectionError("refused")) is True
 
@@ -64,8 +68,8 @@ class TestIsTransient:
 # complete() retry behavior
 # ---------------------------------------------------------------------------
 
-class TestCompleteRetry:
 
+class TestCompleteRetry:
     def _mock_response(self, content: str = "summary text"):
         """Build a mock OpenAI chat completion response."""
         msg = MagicMock()
@@ -81,8 +85,10 @@ class TestCompleteRetry:
         resp = self._mock_response("ok")
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
-        with patch("yt_artist.llm.get_client", return_value=mock_client), \
-             patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")):
+        with (
+            patch("yt_artist.llm.get_client", return_value=mock_client),
+            patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
+        ):
             result = complete("sys", "user", max_retries=2)
         assert result == "ok"
         assert mock_client.chat.completions.create.call_count == 1
@@ -96,9 +102,11 @@ class TestCompleteRetry:
             ConnectionError("refused"),
             resp,
         ]
-        with patch("yt_artist.llm.get_client", return_value=mock_client), \
-             patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")), \
-             patch("yt_artist.llm._time.sleep"):
+        with (
+            patch("yt_artist.llm.get_client", return_value=mock_client),
+            patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
+            patch("yt_artist.llm._time.sleep"),
+        ):
             result = complete("sys", "user", max_retries=3)
         assert result == "recovered"
         assert mock_client.chat.completions.create.call_count == 3
@@ -107,11 +115,12 @@ class TestCompleteRetry:
         """Transient error exhausts retries and raises RuntimeError."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.side_effect = ConnectionError("refused")
-        with patch("yt_artist.llm.get_client", return_value=mock_client), \
-             patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")), \
-             patch("yt_artist.llm._time.sleep"):
-            with pytest.raises(RuntimeError, match="Ollama"):
-                complete("sys", "user", max_retries=2)
+        with (
+            patch("yt_artist.llm.get_client", return_value=mock_client),
+            patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
+            patch("yt_artist.llm._time.sleep"),pytest.raises(RuntimeError, match="Ollama")
+        ):
+            complete("sys", "user", max_retries=2)
         # 1 original + 2 retries = 3 calls
         assert mock_client.chat.completions.create.call_count == 3
 
@@ -119,8 +128,10 @@ class TestCompleteRetry:
         """Non-transient error raises immediately without retrying."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.side_effect = ValueError("bad input")
-        with patch("yt_artist.llm.get_client", return_value=mock_client), \
-             patch("yt_artist.llm._resolve_config", return_value=("https://api.openai.com/v1", "sk-x", "gpt-4")):
+        with (
+            patch("yt_artist.llm.get_client", return_value=mock_client),
+            patch("yt_artist.llm._resolve_config", return_value=("https://api.openai.com/v1", "sk-x", "gpt-4")),
+        ):
             with pytest.raises(RuntimeError, match="api.openai.com"):
                 complete("sys", "user", max_retries=3)
         assert mock_client.chat.completions.create.call_count == 1
@@ -135,9 +146,11 @@ class TestCompleteRetry:
             resp,
         ]
         sleep_times = []
-        with patch("yt_artist.llm.get_client", return_value=mock_client), \
-             patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")), \
-             patch("yt_artist.llm._time.sleep", side_effect=lambda s: sleep_times.append(s)):
+        with (
+            patch("yt_artist.llm.get_client", return_value=mock_client),
+            patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
+            patch("yt_artist.llm._time.sleep", side_effect=lambda s: sleep_times.append(s)),
+        ):
             complete("sys", "user", max_retries=3)
         assert len(sleep_times) == 2
         assert sleep_times[0] == 2  # initial backoff

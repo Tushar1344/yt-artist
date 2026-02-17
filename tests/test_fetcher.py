@@ -1,11 +1,10 @@
 """Tests for fetcher: mock yt-dlp output, assert file content and DB state."""
+
 import json
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yt_artist import storage
 from yt_artist.fetcher import fetch_channel
 
 

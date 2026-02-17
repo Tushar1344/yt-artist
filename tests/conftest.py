@@ -1,4 +1,5 @@
 """Pytest fixtures: temp DB for tests."""
+
 import pytest
 
 from yt_artist import storage

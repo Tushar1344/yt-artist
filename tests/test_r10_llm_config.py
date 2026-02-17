@@ -1,8 +1,9 @@
 """Tests for R10: _resolve_config() deduplication in llm.py."""
+
 import os
 from unittest.mock import patch
 
-from yt_artist.llm import _resolve_config, OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL
+from yt_artist.llm import OLLAMA_BASE_URL, OLLAMA_DEFAULT_MODEL, _resolve_config
 
 
 def test_resolve_config_no_env():
@@ -34,7 +35,9 @@ def test_resolve_config_custom_ollama_url():
 
 def test_resolve_config_custom_non_ollama_url():
     """OPENAI_BASE_URL pointing to custom non-Ollama endpoint."""
-    with patch.dict(os.environ, {"OPENAI_BASE_URL": "https://custom.llm.api/v1", "OPENAI_API_KEY": "key123"}, clear=True):
+    with patch.dict(
+        os.environ, {"OPENAI_BASE_URL": "https://custom.llm.api/v1", "OPENAI_API_KEY": "key123"}, clear=True
+    ):
         base_url, api_key, model = _resolve_config()
     assert base_url == "https://custom.llm.api/v1"
     assert api_key == "key123"

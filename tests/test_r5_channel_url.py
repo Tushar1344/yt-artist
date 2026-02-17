@@ -1,4 +1,5 @@
 """Tests for R5: channel_url_for() helper."""
+
 from yt_artist.yt_dlp_util import channel_url_for
 
 

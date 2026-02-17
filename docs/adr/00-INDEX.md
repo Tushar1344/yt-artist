@@ -17,5 +17,7 @@
   - [ADR-0011](0011-parallel-execution.md) — Parallel execution with ThreadPoolExecutor
   - [ADR-0012](0012-pipeline-parallelism.md) — Pipeline parallelism for bulk transcribe + summarize (accepted)
   - [ADR-0013](0013-long-transcript-summarization.md) — Long-transcript summarization strategies and quality scoring (accepted)
+- **Quality & prompts**
+  - [ADR-0014](0014-baml-prompts-hallucination-guardrails.md) — BAML prompt management and hallucination guardrails (accepted)
 - **User experience**
   - [ADR-0009](0009-guided-onboarding.md) — Guided onboarding (hints, quickstart, --quiet)

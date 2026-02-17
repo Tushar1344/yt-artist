@@ -1,4 +1,5 @@
 """Tests for R1: Foreign key enforcement is enabled on every connection."""
+
 import sqlite3
 
 import pytest

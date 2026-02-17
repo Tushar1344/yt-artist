@@ -1,4 +1,5 @@
 """Shared yt-dlp helpers used by fetcher and transcriber."""
+
 from __future__ import annotations
 
 import functools
@@ -119,14 +120,10 @@ _YT_HOSTS = {
 }
 
 # Channel URL patterns: /@handle, /channel/UC..., /c/name, /user/name
-_CHANNEL_PATH_RE = re.compile(
-    r"^/(@[\w.-]+|channel/[\w-]+|c/[\w.-]+|user/[\w.-]+)/?$"
-)
+_CHANNEL_PATH_RE = re.compile(r"^/(@[\w.-]+|channel/[\w-]+|c/[\w.-]+|user/[\w.-]+)/?$")
 
 # Video URL patterns: /watch?v=..., /shorts/..., /embed/..., /v/...
-_VIDEO_PATH_RE = re.compile(
-    r"^/(watch|shorts/[\w-]+|embed/[\w-]+|v/[\w-]+|live/[\w-]+)"
-)
+_VIDEO_PATH_RE = re.compile(r"^/(watch|shorts/[\w-]+|embed/[\w-]+|v/[\w-]+|live/[\w-]+)")
 
 
 def validate_youtube_channel_url(url: str) -> str:
@@ -158,6 +155,7 @@ def validate_youtube_channel_url(url: str) -> str:
     # Parse host.
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
     except Exception:
         raise SystemExit(f"Cannot parse URL: {url}")
@@ -175,7 +173,7 @@ def validate_youtube_channel_url(url: str) -> str:
     if _VIDEO_PATH_RE.match(path):
         raise SystemExit(
             f"This looks like a video URL, not a channel URL: {url}\n"
-            "  To transcribe a single video:  yt-artist transcribe \"{url}\"\n"
+            '  To transcribe a single video:  yt-artist transcribe "{url}"\n'
             "  For a channel URL, use:        https://www.youtube.com/@handle"
         )
 
@@ -219,7 +217,8 @@ def validate_youtube_video_url(url_or_id: str) -> str:
         )
 
     try:
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
+
         parsed = urlparse(url_or_id)
     except Exception:
         raise SystemExit(f"Cannot parse URL: {url_or_id}")
@@ -244,7 +243,7 @@ def validate_youtube_video_url(url_or_id: str) -> str:
         if _CHANNEL_PATH_RE.match(path):
             raise SystemExit(
                 f"This looks like a channel URL, not a video URL: {url_or_id}\n"
-                "  To fetch a channel:  yt-artist fetch-channel \"{url_or_id}\"\n"
+                '  To fetch a channel:  yt-artist fetch-channel "{url_or_id}"\n'
                 "  For a video, use:    https://www.youtube.com/watch?v=VIDEO_ID"
             )
         raise SystemExit(

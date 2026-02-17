@@ -1,11 +1,12 @@
 """Quality scoring for summaries: heuristic + lightweight LLM self-check.
 
 Two-tier scoring (each 0.0–1.0):
-  - heuristic_score: length ratio, repetition, key-term coverage, structure
-  - llm_score: tiny LLM call asking model to rate completeness/coherence/faithfulness
+  - heuristic_score: length ratio, repetition, key-term coverage, structure, named entity verification
+  - llm_score: BAML-powered LLM call returning typed ScoreRating (completeness/coherence/faithfulness)
   - quality_score: weighted blend (0.4 * heuristic + 0.6 * llm)
 
 Scoring is decoupled from summarization and runs as a separate pipeline stage.
+Prompts are managed via BAML (.baml files in baml_src/) through the prompts module.
 """
 
 from __future__ import annotations
@@ -13,25 +14,12 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
-from yt_artist.llm import complete
+from yt_artist import prompts
 from yt_artist.storage import Storage
 
 log = logging.getLogger("yt_artist.scorer")
-
-# ---------------------------------------------------------------------------
-# LLM self-check prompt
-# ---------------------------------------------------------------------------
-
-_LLM_SCORE_PROMPT = (
-    "Rate this summary of a video transcript on a scale of 1–5 for each criterion:\n"
-    "- Completeness: Does it cover the main topics of the transcript?\n"
-    "- Coherence: Does it read naturally and logically?\n"
-    "- Faithfulness: Does it only state things from the transcript (no hallucinations)?\n\n"
-    "Return ONLY three numbers separated by spaces, e.g.: 4 3 5\n"
-    "Do not include any other text."
-)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +124,153 @@ def _key_term_coverage(summary: str, transcript: str, top_n: int = 20) -> float:
     return hits / len(top_terms)
 
 
+_ENTITY_STOPWORDS = {
+    # Sentence-start words often capitalized but not proper nouns
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "however",
+    "therefore",
+    "furthermore",
+    "moreover",
+    "additionally",
+    "meanwhile",
+    "nevertheless",
+    "consequently",
+    "overall",
+    "finally",
+    "first",
+    "second",
+    "third",
+    "next",
+    "then",
+    "also",
+    "here",
+    "there",
+    "where",
+    "when",
+    "what",
+    "which",
+    "while",
+    "after",
+    "before",
+    "during",
+    "since",
+    "until",
+    "although",
+    "because",
+    "but",
+    "and",
+    "for",
+    "not",
+    "with",
+    "from",
+    "into",
+    "about",
+    "some",
+    "many",
+    "most",
+    "each",
+    "every",
+    "both",
+    "several",
+    "other",
+    "another",
+    "such",
+    "like",
+    "just",
+    "only",
+    "even",
+    # Months and days
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    # Common non-entity capitalized words
+    "chapter",
+    "section",
+    "part",
+    "point",
+    "step",
+    "figure",
+    "table",
+    "key",
+    "important",
+    "main",
+    "summary",
+    "conclusion",
+    "introduction",
+}
+
+
+def _named_entity_score(summary: str, transcript: str) -> float:
+    """Score based on whether proper nouns in summary appear in transcript.
+
+    Extracts capitalized multi-word sequences (likely proper nouns) from the
+    summary, then checks each against the transcript (case-insensitive).
+    Returns verified_count / total. Returns 1.0 if no entities found (neutral).
+    """
+    # Match capitalized words that aren't sentence starters:
+    # Look for sequences of 2+ capitalized words (e.g. "Elijah Wood", "Stanford University")
+    # Also match single capitalized words that appear mid-sentence
+    entities: set[str] = set()
+
+    # Multi-word proper nouns: 2+ consecutive capitalized words
+    for match in re.finditer(r"(?<![.!?]\s)(?<!\n)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", summary):
+        entity = match.group(1)
+        words = entity.lower().split()
+        if not all(w in _ENTITY_STOPWORDS for w in words):
+            entities.add(entity.lower())
+
+    # Single capitalized words mid-sentence (after lowercase word or comma)
+    for match in re.finditer(r"(?<=[a-z,]\s)([A-Z][a-z]{2,})", summary):
+        word = match.group(1).lower()
+        if word not in _ENTITY_STOPWORDS:
+            entities.add(word)
+
+    if not entities:
+        return 1.0  # No entities to check — neutral
+
+    transcript_lower = transcript.lower()
+    verified = sum(1 for e in entities if e in transcript_lower)
+    return verified / len(entities)
+
+
+def _sample_transcript(transcript: str, max_excerpt: int = 3000) -> str:
+    """Stratified sampling of transcript: start, middle, end.
+
+    Short transcripts (≤ max_excerpt) returned whole. Longer ones get ~1000 chars
+    from each of three segments separated by [...] markers.
+    """
+    if len(transcript) <= max_excerpt:
+        return transcript
+
+    segment = max_excerpt // 3  # ~1000 chars each
+    start = transcript[:segment]
+    mid_point = len(transcript) // 2
+    middle = transcript[mid_point - segment // 2 : mid_point + segment // 2]
+    end = transcript[-segment:]
+
+    return f"{start}\n\n[...]\n\n{middle}\n\n[...]\n\n{end}"
+
+
 def _structure_score(summary: str) -> float:
     """Score based on structural quality: multiple sentences, sections, bullet points."""
     sentences = [s.strip() for s in re.split(r"[.!?]\s+", summary) if s.strip()]
@@ -168,63 +303,105 @@ def _structure_score(summary: str) -> float:
 def heuristic_score(summary: str, transcript: str) -> float:
     """Compute heuristic quality score (0.0–1.0) without any LLM call.
 
-    Weighted average of: length ratio (0.3), repetition (0.2),
-    key-term coverage (0.3), structure (0.2).
+    Weighted average of: length ratio (0.25), repetition (0.15),
+    key-term coverage (0.25), structure (0.15), named entity (0.20).
     """
     s_len = _length_ratio_score(len(summary), len(transcript))
     s_rep = _repetition_score(summary)
     s_cov = _key_term_coverage(summary, transcript)
     s_str = _structure_score(summary)
-    score = 0.3 * s_len + 0.2 * s_rep + 0.3 * s_cov + 0.2 * s_str
+    s_ent = _named_entity_score(summary, transcript)
+    score = 0.25 * s_len + 0.15 * s_rep + 0.25 * s_cov + 0.15 * s_str + 0.20 * s_ent
     return round(score, 4)
 
 
-def _parse_llm_rating(text: str) -> Optional[Tuple[int, int, int]]:
-    """Parse '4 3 5' style LLM output into (completeness, coherence, faithfulness).
+def llm_score(summary: str, transcript: str, *, model: Optional[str] = None) -> Optional[Dict[str, float]]:
+    """Compute LLM self-check scores via BAML ScoreSummary function.
 
-    Returns None if the output can't be parsed into exactly 3 integers 1–5.
+    Calls the BAML ScoreSummary function which returns a typed ScoreRating
+    with completeness, coherence, and faithfulness (1–5 each).
+    Returns dict with 'llm_score' (overall normalized avg) and 'faithfulness'
+    (faithfulness dimension normalized separately), or None if LLM call fails.
     """
-    nums = re.findall(r"\d+", text)
-    if len(nums) < 3:
-        return None
+    # Build a stratified excerpt of the transcript for context
+    excerpt = _sample_transcript(transcript, max_excerpt=3000)
+
     try:
-        vals = [int(n) for n in nums[:3]]
-    except ValueError:
-        return None
-    if all(1 <= v <= 5 for v in vals):
-        return (vals[0], vals[1], vals[2])
-    return None
-
-
-def llm_score(summary: str, transcript: str, *, model: Optional[str] = None) -> Optional[float]:
-    """Compute LLM self-check score (0.0–1.0) via a tiny LLM call.
-
-    Asks the model to rate completeness, coherence, and faithfulness (1–5 each).
-    Returns average normalized to 0.0–1.0, or None if LLM call fails or output unparseable.
-    """
-    # Build a short excerpt of the transcript for context (avoid sending full text)
-    max_excerpt = 3000
-    excerpt = transcript[:max_excerpt]
-    if len(transcript) > max_excerpt:
-        excerpt += "\n\n[...transcript truncated for scoring...]"
-
-    user_content = f"Transcript excerpt:\n{excerpt}\n\nSummary:\n{summary}"
-    try:
-        raw = complete(system_prompt=_LLM_SCORE_PROMPT, user_content=user_content, model=model)
+        rating = prompts.score_summary(transcript_excerpt=excerpt, summary=summary)
     except Exception as exc:
         log.warning("LLM scoring call failed: %s", exc)
         return None
 
-    parsed = _parse_llm_rating(raw)
-    if parsed is None:
-        log.warning("Could not parse LLM score output: %r", raw[:200])
+    # Validate rating values are in expected range
+    try:
+        completeness = int(rating.completeness)
+        coherence = int(rating.coherence)
+        faithfulness = int(rating.faithfulness)
+    except (TypeError, ValueError, AttributeError) as exc:
+        log.warning("Could not extract scores from BAML ScoreRating: %s", exc)
         return None
 
-    completeness, coherence, faithfulness = parsed
+    if not all(1 <= v <= 5 for v in (completeness, coherence, faithfulness)):
+        log.warning(
+            "ScoreRating values out of range: completeness=%s, coherence=%s, faithfulness=%s",
+            completeness,
+            coherence,
+            faithfulness,
+        )
+        return None
+
     avg = (completeness + coherence + faithfulness) / 3.0
     # Normalize 1–5 to 0.0–1.0
     normalized = (avg - 1.0) / 4.0
-    return round(normalized, 4)
+    faith_normalized = (faithfulness - 1.0) / 4.0
+    return {
+        "llm_score": round(normalized, 4),
+        "faithfulness": round(faith_normalized, 4),
+    }
+
+
+def verify_claims(
+    summary: str,
+    transcript: str,
+    *,
+    model: Optional[str] = None,
+) -> Optional[Dict]:
+    """Verify factual claims in a summary against the transcript.
+
+    Calls the BAML VerifyClaims function which returns a list of
+    ClaimVerification objects (claim text + verified boolean).
+    Returns dict with 'claims' list, 'verification_score', or None on failure.
+    """
+    excerpt = _sample_transcript(transcript, max_excerpt=6000)
+
+    try:
+        claims = prompts.verify_claims(summary=summary, transcript_excerpt=excerpt)
+    except Exception as exc:
+        log.warning("Claim verification failed: %s", exc)
+        return None
+
+    if not claims:
+        log.warning("VerifyClaims returned empty list")
+        return None
+
+    results = []
+    for c in claims:
+        try:
+            results.append((str(c.claim), bool(c.verified)))
+        except (AttributeError, TypeError) as exc:
+            log.warning("Could not parse claim: %s", exc)
+            continue
+
+    if not results:
+        return None
+
+    verified_count = sum(1 for _, v in results if v)
+    v_score = round(verified_count / len(results), 4)
+
+    return {
+        "claims": results,
+        "verification_score": v_score,
+    }
 
 
 def score_summary(
@@ -233,36 +410,43 @@ def score_summary(
     *,
     model: Optional[str] = None,
     skip_llm: bool = False,
+    verify: bool = False,
 ) -> Dict[str, Optional[float]]:
     """Compute full quality scores for a summary.
 
-    Returns dict with keys: heuristic_score, llm_score, quality_score.
+    Returns dict with keys: heuristic_score, llm_score, quality_score,
+    faithfulness_score, verification_score.
     If *skip_llm* is True, llm_score=None and quality_score equals heuristic_score.
+    If *verify* is True, runs claim verification (1 extra LLM call).
     """
     h_score = heuristic_score(summary, transcript)
 
-    if skip_llm:
-        return {
-            "heuristic_score": h_score,
-            "llm_score": None,
-            "quality_score": h_score,
-        }
-
-    l_score = llm_score(summary, transcript, model=model)
-    if l_score is None:
-        # LLM failed — fall back to heuristic only
-        return {
-            "heuristic_score": h_score,
-            "llm_score": None,
-            "quality_score": h_score,
-        }
-
-    q_score = round(0.4 * h_score + 0.6 * l_score, 4)
-    return {
+    base_result: Dict[str, Optional[float]] = {
         "heuristic_score": h_score,
-        "llm_score": l_score,
-        "quality_score": q_score,
+        "llm_score": None,
+        "quality_score": h_score,
+        "faithfulness_score": None,
+        "verification_score": None,
     }
+
+    if not skip_llm:
+        l_result = llm_score(summary, transcript, model=model)
+        if l_result is not None:
+            l_score = l_result["llm_score"]
+            f_score = l_result["faithfulness"]
+            if f_score is not None and f_score <= 0.4:
+                log.warning("Low faithfulness score (%.2f) — summary may contain hallucinated content", f_score)
+            q_score = round(0.4 * h_score + 0.6 * l_score, 4)
+            base_result["llm_score"] = l_score
+            base_result["quality_score"] = q_score
+            base_result["faithfulness_score"] = f_score
+
+    if verify:
+        v_result = verify_claims(summary, transcript, model=model)
+        if v_result is not None:
+            base_result["verification_score"] = v_result["verification_score"]
+
+    return base_result
 
 
 def score_video_summary(
@@ -272,11 +456,13 @@ def score_video_summary(
     *,
     model: Optional[str] = None,
     skip_llm: bool = False,
+    verify: bool = False,
 ) -> Optional[Dict[str, Optional[float]]]:
     """Score an existing summary for a video+prompt pair.
 
     Reads summary and transcript from DB, computes scores, writes them back.
     Returns the score dict, or None if no summary/transcript found.
+    If *verify* is True, runs claim verification (1 extra LLM call).
     """
     rows = storage.get_summaries_for_video(video_id)
     summary_row = next((r for r in rows if r["prompt_id"] == prompt_id), None)
@@ -294,6 +480,7 @@ def score_video_summary(
         transcript_row["raw_text"],
         model=model,
         skip_llm=skip_llm,
+        verify=verify,
     )
 
     storage.update_summary_scores(
@@ -302,14 +489,18 @@ def score_video_summary(
         quality_score=scores["quality_score"],
         heuristic_score=scores["heuristic_score"],
         llm_score=scores["llm_score"],
+        faithfulness_score=scores.get("faithfulness_score"),
+        verification_score=scores.get("verification_score"),
     )
 
     log.info(
-        "Scored %s:%s — quality=%.2f (heuristic=%.2f, llm=%s)",
+        "Scored %s:%s — quality=%.2f (heuristic=%.2f, llm=%s, faith=%s, verified=%s)",
         video_id,
         prompt_id,
         scores["quality_score"],
         scores["heuristic_score"],
         f"{scores['llm_score']:.2f}" if scores["llm_score"] is not None else "N/A",
+        f"{scores['faithfulness_score']:.2f}" if scores.get("faithfulness_score") is not None else "N/A",
+        f"{scores['verification_score']:.0%}" if scores.get("verification_score") is not None else "N/A",
     )
     return scores

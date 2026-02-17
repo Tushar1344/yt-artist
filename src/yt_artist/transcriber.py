@@ -1,4 +1,5 @@
 """Fetch video transcript via yt-dlp; save to DB and optional file."""
+
 from __future__ import annotations
 
 import json
@@ -48,12 +49,14 @@ def _get_available_sub_langs(video_url: str) -> List[str]:
         raw = info.get(key) or {}
         if isinstance(raw, dict):
             codes.extend(raw.keys())
+
     # Prefer English-like codes first
     def rank(c: str) -> Tuple[int, str]:
         c_lower = c.lower()
         if c_lower.startswith("en") or ".en" in c_lower or c_lower == "a.en":
             return (0, c)
         return (1, c)
+
     codes = sorted(set(codes), key=rank)
     return codes
 
@@ -165,19 +168,22 @@ def _classify_yt_dlp_error(stderr: str) -> Tuple[str, str]:
 
     for p in _AGE_PATTERNS:
         if p in lower:
-            return ("age_restricted",
-                    f"This video is age-restricted. YouTube requires authentication.\n{_AUTH_GUIDANCE}")
+            return (
+                "age_restricted",
+                f"This video is age-restricted. YouTube requires authentication.\n{_AUTH_GUIDANCE}",
+            )
 
     for p in _AUTH_PATTERNS:
         if p in lower:
-            return ("auth_required",
-                    f"YouTube requires authentication for this content.\n{_AUTH_GUIDANCE}")
+            return ("auth_required", f"YouTube requires authentication for this content.\n{_AUTH_GUIDANCE}")
 
     for p in _BOT_PATTERNS:
         if p in lower:
-            return ("bot_detected",
-                    f"YouTube detected automated access and is blocking requests.\n"
-                    f"This usually means you need a PO (proof of origin) token.\n{_AUTH_GUIDANCE}")
+            return (
+                "bot_detected",
+                f"YouTube detected automated access and is blocking requests.\n"
+                f"This usually means you need a PO (proof of origin) token.\n{_AUTH_GUIDANCE}",
+            )
 
     return ("generic", "")
 
@@ -204,7 +210,11 @@ def _run_yt_dlp_with_backoff(
     for attempt in range(_MAX_429_RETRIES + 1):
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120, cwd=str(out_dir),
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(out_dir),
             )
         except subprocess.TimeoutExpired:
             log.warning("yt-dlp %s timed out for %s", label, video_url)
@@ -226,15 +236,14 @@ def _run_yt_dlp_with_backoff(
         if storage is not None:
             try:
                 from yt_artist.rate_limit import log_request
+
                 log_request(storage, "subtitle_download")
             except Exception:  # noqa: BLE001
                 pass  # rate logging is best-effort; don't break transcription
         # Non-429 error classification
         err_type, err_msg = _classify_yt_dlp_error(stderr)
         if err_type not in ("rate_limit", "generic"):
-            raise FileNotFoundError(
-                f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}"
-            )
+            raise FileNotFoundError(f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}")
         return (stdout, stderr, False)
     # Should not reach here but just in case
     return ("", "", False)
@@ -259,7 +268,9 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Stora
 
     # --- Step 1: Optimistic English download (single yt-dlp call) ---
     cmd = _build_sub_download_cmd(video_url, out_tmpl, "en,a.en,en-US,en-GB,en.*")
-    last_stdout, last_stderr, timed_out = _run_yt_dlp_with_backoff(cmd, video_url, out_dir, "optimistic English", storage=storage)
+    last_stdout, last_stderr, timed_out = _run_yt_dlp_with_backoff(
+        cmd, video_url, out_dir, "optimistic English", storage=storage
+    )
     if not timed_out:
         found = _find_subtitle_file(out_dir)
         if found:
@@ -280,7 +291,11 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Stora
     for attempt, sub_langs in enumerate(sub_langs_list):
         cmd = _build_sub_download_cmd(video_url, out_tmpl, sub_langs)
         stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
-            cmd, video_url, out_dir, f"attempt {attempt + 1}", storage=storage,
+            cmd,
+            video_url,
+            out_dir,
+            f"attempt {attempt + 1}",
+            storage=storage,
         )
         last_stdout, last_stderr = stdout, stderr
         if timed_out:
@@ -293,17 +308,12 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Stora
     combined_stderr = (last_stdout + last_stderr).strip()
     err_type, err_msg = _classify_yt_dlp_error(combined_stderr)
     if err_type not in ("rate_limit", "generic"):
-        raise FileNotFoundError(
-            f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}"
-        )
+        raise FileNotFoundError(f"yt-dlp cannot download subtitles for {video_url}.\n{err_msg}")
 
     yt_out = combined_stderr
     hint = f" yt-dlp: {yt_out[:400]}" if yt_out else ""
     langs_hint = f" Detected subtitle languages: {', '.join(json_langs[:10])}" if json_langs else ""
-    msg = (
-        f"No subtitle file written under {out_dir}. "
-        "yt-dlp reports no subtitle tracks are available for download."
-    )
+    msg = f"No subtitle file written under {out_dir}. yt-dlp reports no subtitle tracks are available for download."
     msg += langs_hint
     msg += (
         " Note: Some videos show subtitles in the browser player but don't expose them via the API. "
@@ -314,6 +324,7 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Stora
     has_provider = False
     try:
         from importlib.metadata import distribution
+
         distribution("yt-dlp-get-pot-rustypipe")
         has_provider = True
     except Exception:
@@ -382,11 +393,7 @@ def transcribe(
     Returns video_id.
     """
     video_id = extract_video_id(video_url_or_id)
-    url = (
-        video_url_or_id
-        if video_url_or_id.startswith("http")
-        else f"https://www.youtube.com/watch?v={video_id}"
-    )
+    url = video_url_or_id if video_url_or_id.startswith("http") else f"https://www.youtube.com/watch?v={video_id}"
 
     with tempfile.TemporaryDirectory(prefix="yt_artist_") as tmp:
         out_dir = Path(tmp) / "subs"

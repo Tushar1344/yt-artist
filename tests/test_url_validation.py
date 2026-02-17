@@ -1,4 +1,5 @@
 """Tests for YouTube URL validation: channel and video URLs."""
+
 import pytest
 
 from yt_artist.yt_dlp_util import (
@@ -6,15 +7,17 @@ from yt_artist.yt_dlp_util import (
     validate_youtube_video_url,
 )
 
-
 # ---------------------------------------------------------------------------
 # validate_youtube_channel_url — happy paths
 # ---------------------------------------------------------------------------
 
-class TestChannelUrlHappy:
 
+class TestChannelUrlHappy:
     def test_standard_handle(self):
-        assert validate_youtube_channel_url("https://www.youtube.com/@hubermanlab") == "https://www.youtube.com/@hubermanlab"
+        assert (
+            validate_youtube_channel_url("https://www.youtube.com/@hubermanlab")
+            == "https://www.youtube.com/@hubermanlab"
+        )
 
     def test_bare_handle_expanded(self):
         """Bare @handle is expanded to full URL."""
@@ -52,8 +55,8 @@ class TestChannelUrlHappy:
 # validate_youtube_channel_url — error cases
 # ---------------------------------------------------------------------------
 
-class TestChannelUrlErrors:
 
+class TestChannelUrlErrors:
     def test_empty_string(self):
         with pytest.raises(SystemExit, match="empty"):
             validate_youtube_channel_url("")
@@ -84,8 +87,8 @@ class TestChannelUrlErrors:
 # validate_youtube_video_url — happy paths
 # ---------------------------------------------------------------------------
 
-class TestVideoUrlHappy:
 
+class TestVideoUrlHappy:
     def test_standard_watch_url(self):
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         assert validate_youtube_video_url(url) == url
@@ -117,8 +120,8 @@ class TestVideoUrlHappy:
 # validate_youtube_video_url — error cases
 # ---------------------------------------------------------------------------
 
-class TestVideoUrlErrors:
 
+class TestVideoUrlErrors:
     def test_empty_string(self):
         with pytest.raises(SystemExit, match="empty"):
             validate_youtube_video_url("")

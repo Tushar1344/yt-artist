@@ -1,7 +1,6 @@
 """Tests for storage layer: artists, videos, transcripts, prompts, summaries."""
-import pytest
 
-from yt_artist import storage
+
 
 
 def test_create_and_get_artist(store):

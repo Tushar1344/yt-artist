@@ -1,4 +1,5 @@
 """Initialize or ensure SQLite schema exists."""
+
 from pathlib import Path
 
 

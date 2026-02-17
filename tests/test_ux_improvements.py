@@ -152,23 +152,14 @@ class TestTranscriptTruncation:
         from yt_artist.summarizer import summarize
 
         with (
-            patch("yt_artist.summarizer.complete", return_value="Summary text") as mock_complete,
+            patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="Summary text") as mock_single,
             patch.dict(os.environ, {"YT_ARTIST_MAX_TRANSCRIPT_CHARS": "1000"}),
         ):
             summarize("vid001234567", "p1", store, strategy="truncate")
-        # The user_content passed to complete should be truncated
-        call_args = mock_complete.call_args
-        user_content = (
-            call_args.kwargs.get("user_content") or call_args[1]
-            if len(call_args[0]) > 1
-            else call_args.kwargs.get("user_content")
-        )
-        # Positional or keyword — get user_content either way
-        if user_content is None:
-            user_content = call_args[0][1]
-        # "Transcript:\n\n" prefix = 13 chars, then 1000 chars of transcript
-        prefix_len = len("Transcript:\n\n")  # 13
-        assert len(user_content) == prefix_len + 1000
+        # The transcript kwarg passed to summarize_single_pass should be truncated to 1000 chars
+        call_args = mock_single.call_args
+        transcript = call_args.kwargs.get("transcript")
+        assert len(transcript) == 1000
 
     def test_short_transcript_not_truncated(self, tmp_path):
         """Transcript shorter than limit is passed verbatim."""
@@ -187,11 +178,12 @@ class TestTranscriptTruncation:
 
         from yt_artist.summarizer import summarize
 
-        with patch("yt_artist.summarizer.complete", return_value="Summary text") as mock_complete:
+        with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="Summary text") as mock_single:
             summarize("vid001234567", "p1", store)
-        call_args = mock_complete.call_args
-        user_content = call_args[0][1] if len(call_args[0]) > 1 else call_args.kwargs.get("user_content")
-        assert user_content == "Transcript:\n\nShort text"
+        # The transcript kwarg should be the full short text (no truncation)
+        call_args = mock_single.call_args
+        transcript = call_args.kwargs.get("transcript")
+        assert transcript == "Short text"
 
 
 # ---------------------------------------------------------------------------

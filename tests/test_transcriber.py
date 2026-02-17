@@ -1,17 +1,16 @@
 """Tests for transcriber: mock yt-dlp subtitle output; assert DB transcript."""
+
 import os
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from yt_artist import storage
 from yt_artist.transcriber import (
-    extract_video_id,
-    _subs_to_plain_text,
     _classify_yt_dlp_error,
-    _run_yt_dlp_with_backoff,
     _run_yt_dlp_subtitles,
+    _run_yt_dlp_with_backoff,
+    _subs_to_plain_text,
+    extract_video_id,
     transcribe,
 )
 
@@ -121,8 +120,8 @@ def test_transcribe_writes_optional_file(store, tmp_path):
 # _classify_yt_dlp_error tests
 # ---------------------------------------------------------------------------
 
-class TestClassifyYtDlpError:
 
+class TestClassifyYtDlpError:
     def test_rate_limit_detected(self):
         """HTTP 429 / rate limit is classified correctly."""
         err_type, msg = _classify_yt_dlp_error("ERROR: HTTP Error 429: Too Many Requests")
@@ -179,6 +178,7 @@ class TestClassifyYtDlpError:
 # _run_yt_dlp_subtitles provider-aware error message tests
 # ---------------------------------------------------------------------------
 
+
 class TestRunYtDlpWithBackoff:
     """Tests for the extracted _run_yt_dlp_with_backoff helper."""
 
@@ -187,7 +187,10 @@ class TestRunYtDlpWithBackoff:
         mock_result = type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
         with patch("subprocess.run", return_value=mock_result):
             stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
-                ["echo"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                ["echo"],
+                "https://youtube.com/watch?v=x",
+                tmp_path,
+                "test",
             )
         assert stdout == "ok"
         assert not timed_out
@@ -197,34 +200,55 @@ class TestRunYtDlpWithBackoff:
         with patch("subprocess.run", side_effect=TimeoutError("timed out")):
             # subprocess.TimeoutExpired inherits from SubprocessError, let's use it properly
             import subprocess as _sp
+
             with patch("subprocess.run", side_effect=_sp.TimeoutExpired(["cmd"], 120)):
                 stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
-                    ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                    ["cmd"],
+                    "https://youtube.com/watch?v=x",
+                    tmp_path,
+                    "test",
                 )
         assert timed_out is True
         assert stdout == ""
 
     def test_429_retries_then_raises(self, tmp_path):
         """429 exhausts retries and raises FileNotFoundError."""
-        mock_result = type("R", (), {
-            "returncode": 1, "stdout": "", "stderr": "HTTP Error 429: Too Many Requests",
-        })()
-        with patch("subprocess.run", return_value=mock_result), \
-             patch("yt_artist.transcriber._time.sleep"):
+        mock_result = type(
+            "R",
+            (),
+            {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "HTTP Error 429: Too Many Requests",
+            },
+        )()
+        with patch("subprocess.run", return_value=mock_result), patch("yt_artist.transcriber._time.sleep"):
             with pytest.raises(FileNotFoundError, match="429"):
                 _run_yt_dlp_with_backoff(
-                    ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                    ["cmd"],
+                    "https://youtube.com/watch?v=x",
+                    tmp_path,
+                    "test",
                 )
 
     def test_auth_error_raises_immediately(self, tmp_path):
         """Auth/bot error raises on first attempt without retrying."""
-        mock_result = type("R", (), {
-            "returncode": 1, "stdout": "", "stderr": "Sign in to confirm your age",
-        })()
+        mock_result = type(
+            "R",
+            (),
+            {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "Sign in to confirm your age",
+            },
+        )()
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             with pytest.raises(FileNotFoundError, match="age-restricted"):
                 _run_yt_dlp_with_backoff(
-                    ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                    ["cmd"],
+                    "https://youtube.com/watch?v=x",
+                    tmp_path,
+                    "test",
                 )
         # Should only call subprocess once (no retries for auth errors)
         assert mock_run.call_count == 1
@@ -232,6 +256,7 @@ class TestRunYtDlpWithBackoff:
     def test_429_backoff_increases(self, tmp_path):
         """Backoff doubles between 429 retries."""
         call_count = 0
+
         def _mock_run(*a, **kw):
             nonlocal call_count
             call_count += 1
@@ -240,10 +265,15 @@ class TestRunYtDlpWithBackoff:
             return type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
 
         sleep_times = []
-        with patch("subprocess.run", side_effect=_mock_run), \
-             patch("yt_artist.transcriber._time.sleep", side_effect=lambda s: sleep_times.append(s)):
+        with (
+            patch("subprocess.run", side_effect=_mock_run),
+            patch("yt_artist.transcriber._time.sleep", side_effect=lambda s: sleep_times.append(s)),
+        ):
             stdout, stderr, timed_out = _run_yt_dlp_with_backoff(
-                ["cmd"], "https://youtube.com/watch?v=x", tmp_path, "test",
+                ["cmd"],
+                "https://youtube.com/watch?v=x",
+                tmp_path,
+                "test",
             )
         assert stdout == "ok"
         assert not timed_out
@@ -260,6 +290,7 @@ class TestRunYtDlpSubtitlesProviderHints:
     def test_error_hints_install_provider_when_missing(self, tmp_path):
         """When no provider and no manual token, error should suggest installing rustypipe."""
         from importlib.metadata import PackageNotFoundError
+
         original_distribution = __import__("importlib.metadata", fromlist=["distribution"]).distribution
 
         def _mock_distribution(name):
@@ -268,29 +299,45 @@ class TestRunYtDlpSubtitlesProviderHints:
             return original_distribution(name)
 
         # Mock subprocess.run to simulate yt-dlp returning no subtitles (exit 0, no files)
-        mock_result = type("Result", (), {
-            "returncode": 0, "stdout": "", "stderr": "",
-            "check_returncode": lambda self: None,
-        })()
+        mock_result = type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "check_returncode": lambda self: None,
+            },
+        )()
 
-        with patch("subprocess.run", return_value=mock_result), \
-             patch("yt_artist.transcriber._get_available_sub_langs", return_value=[]), \
-             patch("importlib.metadata.distribution", side_effect=_mock_distribution), \
-             patch.dict(os.environ, {}, clear=True):
+        with (
+            patch("subprocess.run", return_value=mock_result),
+            patch("yt_artist.transcriber._get_available_sub_langs", return_value=[]),
+            patch("importlib.metadata.distribution", side_effect=_mock_distribution),
+            patch.dict(os.environ, {}, clear=True),
+        ):
             with pytest.raises(FileNotFoundError, match="pip install yt-dlp-get-pot-rustypipe"):
                 _run_yt_dlp_subtitles("https://www.youtube.com/watch?v=test12345", tmp_path / "subs")
 
     def test_error_hints_provider_installed_but_failed(self, tmp_path):
         """When provider IS installed but subtitles still fail, error should note that."""
         # Mock subprocess.run to simulate yt-dlp returning no subtitles (exit 0, no files)
-        mock_result = type("Result", (), {
-            "returncode": 0, "stdout": "", "stderr": "",
-            "check_returncode": lambda self: None,
-        })()
+        mock_result = type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "check_returncode": lambda self: None,
+            },
+        )()
 
-        with patch("subprocess.run", return_value=mock_result), \
-             patch("yt_artist.transcriber._get_available_sub_langs", return_value=[]), \
-             patch.dict(os.environ, {}, clear=True):
+        with (
+            patch("subprocess.run", return_value=mock_result),
+            patch("yt_artist.transcriber._get_available_sub_langs", return_value=[]),
+            patch.dict(os.environ, {}, clear=True),
+        ):
             # yt-dlp-get-pot-rustypipe is a real dependency, so it IS importable
             with pytest.raises(FileNotFoundError, match="provider.*installed but subtitles still failed"):
                 _run_yt_dlp_subtitles("https://www.youtube.com/watch?v=test12345", tmp_path / "subs")

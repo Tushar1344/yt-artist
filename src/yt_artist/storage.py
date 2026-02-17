@@ -57,12 +57,17 @@ class PromptRow(TypedDict):
     audience_component: str
 
 
-class SummaryRow(TypedDict):
+class SummaryRow(TypedDict, total=False):
     id: int
     video_id: str
     prompt_id: str
     content: str
     created_at: str
+    quality_score: Optional[float]
+    heuristic_score: Optional[float]
+    llm_score: Optional[float]
+    faithfulness_score: Optional[float]
+    verification_score: Optional[float]
 
 
 class TranscriptListRow(TypedDict, total=False):
@@ -138,6 +143,10 @@ class Storage:
             conn.commit()
             self._migrate_summary_score_columns(conn)
             conn.commit()
+            self._migrate_faithfulness_score_column(conn)
+            conn.commit()
+            self._migrate_verification_score_column(conn)
+            conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
         finally:
@@ -210,6 +219,22 @@ class Storage:
             conn.execute("ALTER TABLE summaries ADD COLUMN heuristic_score REAL")
         if "llm_score" not in names:
             conn.execute("ALTER TABLE summaries ADD COLUMN llm_score REAL")
+
+    def _migrate_faithfulness_score_column(self, conn: sqlite3.Connection) -> None:
+        """Add faithfulness_score column to summaries if missing."""
+        cur = conn.execute("PRAGMA table_info(summaries)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "faithfulness_score" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN faithfulness_score REAL")
+
+    def _migrate_verification_score_column(self, conn: sqlite3.Connection) -> None:
+        """Add verification_score column to summaries if missing."""
+        cur = conn.execute("PRAGMA table_info(summaries)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "verification_score" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN verification_score REAL")
 
     # ------ Artists ------
 
@@ -533,14 +558,25 @@ class Storage:
         quality_score: Optional[float],
         heuristic_score: Optional[float],
         llm_score: Optional[float],
+        faithfulness_score: Optional[float] = None,
+        verification_score: Optional[float] = None,
     ) -> None:
         """Write quality scores to an existing summary row."""
         conn = self._conn()
         try:
             conn.execute(
-                "UPDATE summaries SET quality_score = ?, heuristic_score = ?, llm_score = ? "
+                "UPDATE summaries SET quality_score = ?, heuristic_score = ?, llm_score = ?, "
+                "faithfulness_score = ?, verification_score = ? "
                 "WHERE video_id = ? AND prompt_id = ?",
-                (quality_score, heuristic_score, llm_score, video_id, prompt_id),
+                (
+                    quality_score,
+                    heuristic_score,
+                    llm_score,
+                    faithfulness_score,
+                    verification_score,
+                    video_id,
+                    prompt_id,
+                ),
             )
             conn.commit()
         finally:

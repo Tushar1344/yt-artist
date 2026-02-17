@@ -1,4 +1,5 @@
 """Fetch channel video list via yt-dlp; write urllist markdown and upsert Artist + Video rows."""
+
 from __future__ import annotations
 
 import json
@@ -38,6 +39,7 @@ def _run_yt_dlp_flat_playlist_json(channel_url: str, storage: Optional[Storage] 
     if storage is not None:
         try:
             from yt_artist.rate_limit import log_request
+
             log_request(storage, "playlist")
         except Exception:  # noqa: BLE001
             pass  # best-effort
@@ -64,9 +66,7 @@ def _run_yt_dlp_flat_playlist_json(channel_url: str, storage: Optional[Storage] 
     return entries
 
 
-def _channel_id_and_name_from_entries(
-    channel_url: str, entries: List[Dict[str, Any]]
-) -> Tuple[str, str]:
+def _channel_id_and_name_from_entries(channel_url: str, entries: List[Dict[str, Any]]) -> Tuple[str, str]:
     """Derive channel id and name from first entry or channel URL. Fallback to URL-based id/name."""
     if entries:
         first = entries[0]
@@ -108,6 +108,7 @@ def _video_metadata(video_url: str, storage: Optional[Storage] = None) -> Dict[s
     if storage is not None:
         try:
             from yt_artist.rate_limit import log_request
+
             log_request(storage, "metadata")
         except Exception:  # noqa: BLE001
             pass  # best-effort
@@ -162,6 +163,7 @@ def ensure_artist_and_video_for_video_url(
     """
     # Fast path: extract video_id from URL locally (no subprocess) and check DB.
     from yt_artist.transcriber import extract_video_id
+
     try:
         vid_candidate = extract_video_id(video_url)
         video = storage.get_video(vid_candidate)

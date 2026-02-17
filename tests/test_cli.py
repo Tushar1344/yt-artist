@@ -1,4 +1,5 @@
 """Tests for CLI dispatch, prompt resolution, and dependency auto-creation."""
+
 from __future__ import annotations
 
 import os
@@ -11,10 +12,10 @@ import pytest
 from yt_artist.cli import _resolve_prompt_id, main
 from yt_artist.storage import Storage
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_store(tmp_path: Path) -> Storage:
     db = tmp_path / "test.db"
@@ -52,6 +53,7 @@ def _run_cli(*args: str, db_path: str | Path = "") -> int:
     # Clear root logger handlers so basicConfig() in main() reconfigures
     # with the current sys.stderr (which capfd may have redirected).
     import logging as _logging
+
     _logging.root.handlers.clear()
 
     argv = ["yt-artist"]
@@ -69,6 +71,7 @@ def _run_cli(*args: str, db_path: str | Path = "") -> int:
 # ---------------------------------------------------------------------------
 # _resolve_prompt_id
 # ---------------------------------------------------------------------------
+
 
 class TestResolvePromptId:
     """Tests for the prompt-resolution fallback chain."""
@@ -119,15 +122,18 @@ class TestResolvePromptId:
 # CLI: add-prompt / list-prompts
 # ---------------------------------------------------------------------------
 
-class TestPromptCommands:
 
+class TestPromptCommands:
     def test_add_and_list_prompts(self, tmp_path, capfd):
         db = tmp_path / "test.db"
         code = _run_cli(
             "add-prompt",
-            "--id", "my-prompt",
-            "--name", "My Prompt",
-            "--template", "Summarize {video} by {artist}",
+            "--id",
+            "my-prompt",
+            "--name",
+            "My Prompt",
+            "--template",
+            "Summarize {video} by {artist}",
             db_path=db,
         )
         assert code == 0
@@ -145,8 +151,8 @@ class TestPromptCommands:
 # CLI: fetch-channel (mocked)
 # ---------------------------------------------------------------------------
 
-class TestFetchChannel:
 
+class TestFetchChannel:
     def test_fetch_channel_happy_path(self, tmp_path, capfd):
         db = tmp_path / "test.db"
         fake_return = ("data/artists/@Test/urllist.md", 5)
@@ -165,8 +171,8 @@ class TestFetchChannel:
 # CLI: transcribe (mocked)
 # ---------------------------------------------------------------------------
 
-class TestTranscribe:
 
+class TestTranscribe:
     def test_single_video_transcribe(self, tmp_path, capfd):
         db = tmp_path / "test.db"
         store = _make_store(tmp_path / "sub" / "test.db")  # separate to avoid conflict
@@ -188,12 +194,15 @@ class TestTranscribe:
         db = tmp_path / "test.db"
         fake_fetch = ("urllist.md", 1)
 
-        with patch("yt_artist.cli.fetch_channel", return_value=fake_fetch) as mock_fetch, \
-             patch("yt_artist.cli.transcribe", return_value="testvid00001"):
+        with (
+            patch("yt_artist.cli.fetch_channel", return_value=fake_fetch) as mock_fetch,
+            patch("yt_artist.cli.transcribe", return_value="testvid00001"),
+        ):
             # Storage is empty so artist is missing → should trigger auto-fetch
             code = _run_cli(
                 "transcribe",
-                "--artist-id", "@Unknown",
+                "--artist-id",
+                "@Unknown",
                 db_path=db,
             )
         # fetch_channel should have been called
@@ -209,8 +218,8 @@ class TestTranscribe:
 # CLI: summarize (mocked)
 # ---------------------------------------------------------------------------
 
-class TestSummarize:
 
+class TestSummarize:
     def test_single_video_summarize(self, tmp_path, capfd):
         db = tmp_path / "test.db"
         store = Storage(db)
@@ -219,9 +228,11 @@ class TestSummarize:
         _seed_prompt(store, "p1")
         store.save_transcript(video_id="testvid00001", raw_text="Hello world transcript.", format="vtt")
 
-        with patch("yt_artist.cli.summarize", return_value="testvid00001:p1") as mock_sum, \
-             patch("yt_artist.cli.ensure_artist_and_video_for_video_url", return_value=("@TestArtist", "testvid00001")), \
-             patch("yt_artist.cli._check_llm"):
+        with (
+            patch("yt_artist.cli.summarize", return_value="testvid00001:p1") as mock_sum,
+            patch("yt_artist.cli.ensure_artist_and_video_for_video_url", return_value=("@TestArtist", "testvid00001")),
+            patch("yt_artist.cli._check_llm"),
+        ):
             # Mock get_summaries_for_video to return the summary content
             original_get = store.get_summaries_for_video
 
@@ -232,7 +243,8 @@ class TestSummarize:
                 code = _run_cli(
                     "summarize",
                     "testvid00001",
-                    "--prompt", "p1",
+                    "--prompt",
+                    "p1",
                     db_path=db,
                 )
         assert code == 0
@@ -247,8 +259,8 @@ class TestSummarize:
 # CLI: set-default-prompt
 # ---------------------------------------------------------------------------
 
-class TestSetDefaultPrompt:
 
+class TestSetDefaultPrompt:
     def test_set_default_prompt_happy_path(self, tmp_path, capfd):
         db = tmp_path / "test.db"
         store = Storage(db)
@@ -258,8 +270,10 @@ class TestSetDefaultPrompt:
 
         code = _run_cli(
             "set-default-prompt",
-            "--artist-id", "@TestArtist",
-            "--prompt", "p1",
+            "--artist-id",
+            "@TestArtist",
+            "--prompt",
+            "p1",
             db_path=db,
         )
         assert code == 0
@@ -274,8 +288,10 @@ class TestSetDefaultPrompt:
 
         code = _run_cli(
             "set-default-prompt",
-            "--artist-id", "@Nonexistent",
-            "--prompt", "p1",
+            "--artist-id",
+            "@Nonexistent",
+            "--prompt",
+            "p1",
             db_path=db,
         )
         assert code != 0
@@ -288,8 +304,10 @@ class TestSetDefaultPrompt:
 
         code = _run_cli(
             "set-default-prompt",
-            "--artist-id", "@TestArtist",
-            "--prompt", "nonexistent",
+            "--artist-id",
+            "@TestArtist",
+            "--prompt",
+            "nonexistent",
             db_path=db,
         )
         assert code != 0
@@ -299,8 +317,8 @@ class TestSetDefaultPrompt:
 # CLI: search-transcripts
 # ---------------------------------------------------------------------------
 
-class TestSearchTranscripts:
 
+class TestSearchTranscripts:
     def test_search_transcripts_empty(self, tmp_path, capfd):
         db = tmp_path / "test.db"
         store = Storage(db)
@@ -320,7 +338,8 @@ class TestSearchTranscripts:
 
         code = _run_cli(
             "search-transcripts",
-            "--artist-id", "@TestArtist",
+            "--artist-id",
+            "@TestArtist",
             db_path=db,
         )
         assert code == 0
@@ -332,15 +351,17 @@ class TestSearchTranscripts:
 # CLI: doctor
 # ---------------------------------------------------------------------------
 
-class TestDoctor:
 
+class TestDoctor:
     def test_doctor_runs_successfully(self, tmp_path, capfd):
         """doctor command should complete without error."""
         db = tmp_path / "test.db"
-        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
-             patch("subprocess.run") as mock_run, \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("shutil.which", return_value="/usr/bin/yt-dlp"),
+            patch("subprocess.run") as mock_run,
+            patch("yt_artist.llm.check_connectivity"),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
             code = _run_cli("doctor", db_path=db)
         assert code == 0
@@ -348,10 +369,12 @@ class TestDoctor:
     def test_doctor_shows_five_sections(self, tmp_path, capfd):
         """doctor should show all 5 check sections."""
         db = tmp_path / "test.db"
-        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
-             patch("subprocess.run") as mock_run, \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("shutil.which", return_value="/usr/bin/yt-dlp"),
+            patch("subprocess.run") as mock_run,
+            patch("yt_artist.llm.check_connectivity"),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
             code = _run_cli("doctor", db_path=db)
         assert code == 0
@@ -365,9 +388,11 @@ class TestDoctor:
     def test_doctor_detects_missing_yt_dlp(self, tmp_path, capfd):
         """doctor should FAIL when yt-dlp is not installed."""
         db = tmp_path / "test.db"
-        with patch("shutil.which", return_value=None), \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("shutil.which", return_value=None),
+            patch("yt_artist.llm.check_connectivity"),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             code = _run_cli("doctor", db_path=db)
         assert code == 0
         captured = capfd.readouterr()
@@ -377,13 +402,19 @@ class TestDoctor:
     def test_doctor_shows_auth_config(self, tmp_path, capfd):
         """doctor should show cookies and PO token status."""
         db = tmp_path / "test.db"
-        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
-             patch("subprocess.run") as mock_run, \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch.dict(os.environ, {
-                 "YT_ARTIST_COOKIES_BROWSER": "chrome",
-                 "YT_ARTIST_PO_TOKEN": "mytoken",
-             }, clear=False):
+        with (
+            patch("shutil.which", return_value="/usr/bin/yt-dlp"),
+            patch("subprocess.run") as mock_run,
+            patch("yt_artist.llm.check_connectivity"),
+            patch.dict(
+                os.environ,
+                {
+                    "YT_ARTIST_COOKIES_BROWSER": "chrome",
+                    "YT_ARTIST_PO_TOKEN": "mytoken",
+                },
+                clear=False,
+            ),
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
             code = _run_cli("doctor", db_path=db)
         assert code == 0
@@ -395,16 +426,21 @@ class TestDoctor:
         """doctor should WARN when PO token is not set and no provider is installed."""
         db = tmp_path / "test.db"
         from importlib.metadata import PackageNotFoundError
+
         original_distribution = __import__("importlib.metadata", fromlist=["distribution"]).distribution
+
         def _mock_distribution(name):
             if name == "yt-dlp-get-pot-rustypipe":
                 raise PackageNotFoundError(name)
             return original_distribution(name)
-        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
-             patch("subprocess.run") as mock_run, \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch("importlib.metadata.distribution", side_effect=_mock_distribution), \
-             patch.dict(os.environ, {}, clear=True):
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/yt-dlp"),
+            patch("subprocess.run") as mock_run,
+            patch("yt_artist.llm.check_connectivity"),
+            patch("importlib.metadata.distribution", side_effect=_mock_distribution),
+            patch.dict(os.environ, {}, clear=True),
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
             code = _run_cli("doctor", db_path=db)
         assert code == 0
@@ -415,10 +451,12 @@ class TestDoctor:
     def test_doctor_ok_with_provider_installed(self, tmp_path, capfd):
         """doctor should show OK when PO token provider is installed (even without manual token)."""
         db = tmp_path / "test.db"
-        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
-             patch("subprocess.run") as mock_run, \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch.dict(os.environ, {}, clear=True):
+        with (
+            patch("shutil.which", return_value="/usr/bin/yt-dlp"),
+            patch("subprocess.run") as mock_run,
+            patch("yt_artist.llm.check_connectivity"),
+            patch.dict(os.environ, {}, clear=True),
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
             code = _run_cli("doctor", db_path=db)
         assert code == 0
@@ -429,10 +467,12 @@ class TestDoctor:
     def test_doctor_shows_summary(self, tmp_path, capfd):
         """doctor should show a summary line at the end."""
         db = tmp_path / "test.db"
-        with patch("shutil.which", return_value="/usr/bin/yt-dlp"), \
-             patch("subprocess.run") as mock_run, \
-             patch("yt_artist.llm.check_connectivity"), \
-             patch.dict(os.environ, {}, clear=False):
+        with (
+            patch("shutil.which", return_value="/usr/bin/yt-dlp"),
+            patch("subprocess.run") as mock_run,
+            patch("yt_artist.llm.check_connectivity"),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="2024.01.01", stderr="")
             code = _run_cli("doctor", db_path=db)
         assert code == 0
@@ -443,6 +483,7 @@ class TestDoctor:
 # ---------------------------------------------------------------------------
 # CLI: URL validation integration (Phase 1)
 # ---------------------------------------------------------------------------
+
 
 class TestFetchChannelValidation:
     """fetch-channel rejects bad URLs before hitting yt-dlp."""

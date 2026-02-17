@@ -5,6 +5,8 @@ Supports three strategies for long transcripts:
 - map-reduce: chunk → summarize each → combine summaries
 - refine: iteratively refine a rolling summary with each chunk
 - auto: single-pass if fits, map-reduce if too long (new default)
+
+Prompts are managed via BAML (.baml files in baml_src/) through the prompts module.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import logging
 import os
 from typing import List, Optional
 
-from yt_artist.llm import complete
+from yt_artist import prompts
 from yt_artist.storage import Storage
 
 log = logging.getLogger("yt_artist.summarizer")
@@ -108,32 +110,21 @@ def _chunk_text(text: str, chunk_size: int, overlap: int = _CHUNK_OVERLAP) -> Li
 # ---------------------------------------------------------------------------
 
 
-def _summarize_single(system_prompt: str, raw_text: str, model: Optional[str] = None) -> str:
+def _summarize_single(raw_text: str, artist: str, video_title: str) -> str:
     """Summarize text in a single LLM call (fits within context window)."""
-    user_content = "Transcript:\n\n" + raw_text
-    return complete(system_prompt=system_prompt, user_content=user_content, model=model)
+    return prompts.summarize_single_pass(transcript=raw_text, artist=artist, video_title=video_title)
 
 
 # ---------------------------------------------------------------------------
 # Strategy: map-reduce
 # ---------------------------------------------------------------------------
 
-_MAP_PROMPT = (
-    "Summarize this section of a transcript. Preserve key facts, data points, "
-    "quotes, and conclusions. Be thorough — this is section {i} of {n}."
-)
-
-_REDUCE_PROMPT_PREFIX = (
-    "The following are summaries of consecutive sections of a transcript. "
-    "Combine them into a single coherent summary, preserving all key points.\n\n"
-)
-
 
 def _summarize_map_reduce(
-    system_prompt: str,
     raw_text: str,
     max_chars: int,
-    model: Optional[str] = None,
+    artist: str,
+    video_title: str,
 ) -> str:
     """Chunk the transcript → summarize each chunk → combine summaries.
 
@@ -146,9 +137,7 @@ def _summarize_map_reduce(
     # Map: summarize each chunk
     chunk_summaries: List[str] = []
     for i, chunk in enumerate(chunks, 1):
-        map_system = _MAP_PROMPT.format(i=i, n=n)
-        user_content = f"Transcript section {i}/{n}:\n\n{chunk}"
-        summary = complete(system_prompt=map_system, user_content=user_content, model=model)
+        summary = prompts.summarize_chunk(chunk=chunk, chunk_index=i, total_chunks=n)
         if summary.strip():
             chunk_summaries.append(summary.strip())
         log.info("Map-reduce: chunk %d/%d summarized (%d chars → %d chars).", i, n, len(chunk), len(summary))
@@ -162,11 +151,10 @@ def _summarize_map_reduce(
     # Recursive reduce if combined summaries still too long
     if len(combined) > max_chars:
         log.info("Map-reduce: combined summaries (%d chars) exceed limit, reducing recursively.", len(combined))
-        return _summarize_map_reduce(system_prompt, combined, max_chars, model)
+        return _summarize_map_reduce(combined, max_chars, artist, video_title)
 
-    # Final reduce with the user's original system prompt
-    reduce_user = _REDUCE_PROMPT_PREFIX + combined
-    final = complete(system_prompt=system_prompt, user_content=reduce_user, model=model)
+    # Final reduce with artist/video context
+    final = prompts.reduce_chunk_summaries(section_summaries=combined, artist=artist, video_title=video_title)
     log.info("Map-reduce: final summary produced (%d chars).", len(final))
     return final
 
@@ -175,20 +163,12 @@ def _summarize_map_reduce(
 # Strategy: refine (iterative/rolling)
 # ---------------------------------------------------------------------------
 
-_REFINE_PROMPT = (
-    "You have a summary so far and a new section of transcript. "
-    "Update the summary to incorporate the key points from this new section. "
-    "Preserve all important information from the existing summary.\n\n"
-    "Current summary:\n{prev_summary}\n\n"
-    "New transcript section ({i}/{n}):\n{chunk}"
-)
-
 
 def _summarize_refine(
-    system_prompt: str,
     raw_text: str,
     max_chars: int,
-    model: Optional[str] = None,
+    artist: str,
+    video_title: str,
 ) -> str:
     """Iteratively refine a rolling summary with each chunk.
 
@@ -201,15 +181,13 @@ def _summarize_refine(
     n = len(chunks)
     log.info("Refine: splitting %d chars into %d chunks of ~%d chars each.", len(raw_text), n, refine_chunk_size)
 
-    # First chunk: generate initial summary
-    user_content = f"Transcript section 1/{n}:\n\n{chunks[0]}"
-    summary = complete(system_prompt=system_prompt, user_content=user_content, model=model)
+    # First chunk: generate initial summary via single-pass
+    summary = prompts.summarize_single_pass(transcript=chunks[0], artist=artist, video_title=video_title)
     log.info("Refine: initial summary from chunk 1/%d (%d chars).", n, len(summary))
 
     # Subsequent chunks: refine
     for i, chunk in enumerate(chunks[1:], 2):
-        refine_content = _REFINE_PROMPT.format(prev_summary=summary, i=i, n=n, chunk=chunk)
-        summary = complete(system_prompt=system_prompt, user_content=refine_content, model=model)
+        summary = prompts.refine_summary(prev_summary=summary, chunk=chunk, chunk_index=i, total_chunks=n)
         log.info("Refine: updated summary with chunk %d/%d (%d chars).", i, n, len(summary))
 
     return summary
@@ -241,7 +219,7 @@ def summarize(
     model: Optional[str] = None,
     strategy: Optional[str] = None,
 ) -> str:
-    """Load transcript and prompt, fill template, call LLM, save Summary.
+    """Load transcript and prompt, call LLM via BAML, save Summary.
 
     Returns summary id (we use video_id+prompt_id; the row is upserted).
 
@@ -266,17 +244,8 @@ def summarize(
     artist_row = storage.get_artist(video_row["artist_id"]) if video_row else None
 
     artist = artist_override or ((artist_row.get("about") or artist_row.get("name") or "") if artist_row else "")
-    video = video_override or (video_row["title"] if video_row else "")
-    intent = intent_override or (prompt_row.get("intent_component") or "")
-    audience = audience_override or (prompt_row.get("audience_component") or "")
+    video_title = video_override or (video_row["title"] if video_row else "")
 
-    system_prompt = _fill_template(
-        prompt_row["template"],
-        artist=artist,
-        video=video,
-        intent=intent,
-        audience=audience,
-    )
     raw_text = transcript_row["raw_text"]
     max_chars = int(os.environ.get("YT_ARTIST_MAX_TRANSCRIPT_CHARS", _DEFAULT_MAX_TRANSCRIPT_CHARS))
 
@@ -298,28 +267,28 @@ def summarize(
                 max_chars,
                 est_tokens_saved,
             )
-        summary_text = _summarize_single(system_prompt, raw_text, model)
+        summary_text = _summarize_single(raw_text, artist, video_title)
 
     elif strat == "map-reduce":
         if fits_in_context:
-            summary_text = _summarize_single(system_prompt, raw_text, model)
+            summary_text = _summarize_single(raw_text, artist, video_title)
         else:
-            summary_text = _summarize_map_reduce(system_prompt, raw_text, max_chars, model)
+            summary_text = _summarize_map_reduce(raw_text, max_chars, artist, video_title)
 
     elif strat == "refine":
         if fits_in_context:
-            summary_text = _summarize_single(system_prompt, raw_text, model)
+            summary_text = _summarize_single(raw_text, artist, video_title)
         else:
-            summary_text = _summarize_refine(system_prompt, raw_text, max_chars, model)
+            summary_text = _summarize_refine(raw_text, max_chars, artist, video_title)
 
     else:  # "auto"
         if fits_in_context:
-            summary_text = _summarize_single(system_prompt, raw_text, model)
+            summary_text = _summarize_single(raw_text, artist, video_title)
         else:
             log.info(
                 "Auto strategy: transcript (%d chars) exceeds limit (%d), using map-reduce.", len(raw_text), max_chars
             )
-            summary_text = _summarize_map_reduce(system_prompt, raw_text, max_chars, model)
+            summary_text = _summarize_map_reduce(raw_text, max_chars, artist, video_title)
 
     if not summary_text.strip():
         raise ValueError(f"LLM returned empty summary for video_id={video_id}")

@@ -1,8 +1,8 @@
 """Build artist 'about' text from web search or LLM fallback; used by build-artist-prompt."""
+
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from yt_artist.llm import complete
 
@@ -13,14 +13,17 @@ def _search_about(query: str, max_results: int = 3) -> str:
     """Return concatenated snippets from web search. Uses duckduckgo-search if available."""
     try:
         from duckduckgo_search import DDGS
+
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
         if not results:
             return ""
         return " ".join((r.get("body") or r.get("title") or "") for r in results)
     except ImportError:
-        log.warning("duckduckgo-search not installed; using LLM-only fallback. "
-                     "For better results: pip install yt-artist[search]")
+        log.warning(
+            "duckduckgo-search not installed; using LLM-only fallback. "
+            "For better results: pip install yt-artist[search]"
+        )
         return ""
     except Exception as exc:
         log.warning("Web search failed (continuing with LLM fallback): %s", exc)
