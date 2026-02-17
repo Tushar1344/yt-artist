@@ -1,6 +1,6 @@
 # The yt-artist Development Journey: Building a CLI Tool with Human-AI Collaboration
 
-*A record of iterative, collaborative development between a human developer and Claude across 13 sessions.*
+*A record of iterative, collaborative development between a human developer and Claude across 14 sessions.*
 
 ---
 
@@ -261,6 +261,24 @@ Every `.baml` prompt now includes explicit anti-hallucination instructions: "Onl
 
 ---
 
+## Session 14: Parallelism for Scoring + Map-Reduce
+
+**Focus:** Eliminate the last two sequential bottlenecks identified during an async audit of the entire codebase.
+
+**What we found:** An audit of every synchronous operation revealed exactly two worth parallelizing:
+1. `_cmd_score()` — the only bulk command still running a sequential `for` loop. With 100 summaries × 5s each, scoring took ~500s. Transcribe and summarize already used `ThreadPoolExecutor`.
+2. Map-reduce chunk summaries — each chunk summarized sequentially. 10 chunks × 10s = 100s, but chunks are independent (embarrassingly parallel).
+
+**What we built:**
+- **Parallel scoring**: Custom `ThreadPoolExecutor` loop in `_cmd_score()` with `_ProgressCounter` for background job integration. Added `--dry-run` support (was the only bulk command missing it). Chose not to reuse `_run_bulk()` because score needs richer per-item output (quality, faithfulness, verification, LOW FAITHFULNESS markers).
+- **Parallel map-reduce**: `ThreadPoolExecutor` in `_summarize_map_reduce()` map phase. Results keyed by chunk index, reassembled in order after `as_completed`. New `YT_ARTIST_MAP_CONCURRENCY` env var (default 3, set to 1 for local Ollama which processes sequentially anyway).
+
+**What we didn't change:** Everything else. The async audit evaluated 15+ candidates (asyncio migration, synchronous yt-dlp calls, DB operations, pipeline polling) and rejected them all — either the bottleneck is I/O not Python, the refactor cost exceeds the benefit, or rate limiting is the real constraint.
+
+**Result:** 414 tests passing (9 new).
+
+---
+
 ## What We Built: By the Numbers
 
 | Metric | Value |
@@ -268,11 +286,11 @@ Every `.baml` prompt now includes explicit anti-hallucination instructions: "Onl
 | Source files | 16 Python modules + 4 BAML prompt files |
 | Source lines | ~6,000 |
 | Test files | 28 test modules |
-| Total tests | 405 |
+| Total tests | 414 |
 | ADRs | 14 (0001-0014) |
 | New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py` |
-| Sessions | 13 |
-| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 |
+| Sessions | 14 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 |
 
 ---
 

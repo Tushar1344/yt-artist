@@ -1305,15 +1305,22 @@ def _cmd_score(args: argparse.Namespace, storage: Storage, data_dir: Path) -> No
         print(f"No unscored summaries for {artist_id} (prompt={prompt_id}). All scored or no summaries exist.")
         return
 
+    # Dry-run: report count and exit
+    if getattr(args, "dry_run", False):
+        print(f"Would score {len(to_score)} summaries for {artist_id} (prompt={prompt_id}).")
+        return
+
     skip_llm = getattr(args, "skip_llm", False)
     do_verify = getattr(args, "verify", False)
     mode_parts = [f"llm={'off' if skip_llm else 'on'}"]
     if do_verify:
         mode_parts.append("verify=on")
+
+    concurrency = getattr(args, "concurrency", 1) or 1
     print(f"Scoring {len(to_score)} summaries for {artist_id} (prompt={prompt_id}, {', '.join(mode_parts)})…")
-    scored = 0
-    errors = 0
-    for row in to_score:
+
+    def _score_one(row: dict) -> tuple[str, dict | None, str | None]:
+        """Score a single summary; returns (video_id, result_dict | None, error | None)."""
         try:
             result = score_video_summary(
                 row["video_id"],
@@ -1322,21 +1329,38 @@ def _cmd_score(args: argparse.Namespace, storage: Storage, data_dir: Path) -> No
                 skip_llm=skip_llm,
                 verify=do_verify,
             )
-            if result:
+            return (row["video_id"], result, None)
+        except Exception as exc:
+            return (row["video_id"], None, str(exc))
+
+    progress = _ProgressCounter(len(to_score), job_id=_bg_job_id, job_storage=_bg_storage)
+    scored = 0
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(_score_one, row): row for row in to_score}
+        for fut in as_completed(futures):
+            video_id, result, error = fut.result()
+            if error:
+                progress.tick("Scoring", video_id, error=error)
+            elif result:
                 scored += 1
+                progress.tick("Scoring", video_id)
                 q = result["quality_score"]
                 f = result.get("faithfulness_score")
                 v = result.get("verification_score")
                 marker = " [!LOW FAITHFULNESS]" if f is not None and f <= 0.4 else ""
                 verified_str = f" verified={v:.0%}" if v is not None else ""
-                print(f"  {row['video_id']}: quality={q:.2f}{verified_str}{marker}")
+                print(f"  {video_id}: quality={q:.2f}{verified_str}{marker}")
             else:
-                errors += 1
-        except Exception as exc:
-            errors += 1
-            log.warning("Scoring failed for %s: %s", row["video_id"], exc)
+                progress.tick("Scoring", video_id, error="no summary/transcript")
 
-    print(f"Done: {scored} scored, {errors} errors.")
+    total_time = time.monotonic() - progress.t0
+    err_msg = f" ({progress.errors} errors)" if progress.errors else ""
+    print(f"Scored {scored} summaries in {total_time:.0f}s.{err_msg}")
+    progress.finalize(
+        status="completed",
+        error_message=f"{progress.errors} errors" if progress.errors else None,
+    )
 
 
 def _cmd_status(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:

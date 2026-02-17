@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
 from yt_artist import prompts
@@ -27,6 +28,10 @@ _DEFAULT_MAX_TRANSCRIPT_CHARS = 30_000
 
 # Overlap between chunks to preserve cross-boundary context.
 _CHUNK_OVERLAP = 500
+
+# Max concurrent workers for map-reduce chunk summaries.
+# Effective against OpenAI API; local Ollama processes sequentially (set to 1 to skip pool overhead).
+_MAP_CONCURRENCY = int(os.environ.get("YT_ARTIST_MAP_CONCURRENCY", "3"))
 
 # Valid strategy names.
 STRATEGIES = ("auto", "truncate", "map-reduce", "refine")
@@ -134,13 +139,44 @@ def _summarize_map_reduce(
     n = len(chunks)
     log.info("Map-reduce: splitting %d chars into %d chunks of ~%d chars each.", len(raw_text), n, max_chars)
 
-    # Map: summarize each chunk
-    chunk_summaries: List[str] = []
-    for i, chunk in enumerate(chunks, 1):
-        summary = prompts.summarize_chunk(chunk=chunk, chunk_index=i, total_chunks=n)
-        if summary.strip():
-            chunk_summaries.append(summary.strip())
-        log.info("Map-reduce: chunk %d/%d summarized (%d chars → %d chars).", i, n, len(chunk), len(summary))
+    # Map: summarize each chunk (parallel when multiple chunks + concurrency > 1)
+    max_workers = min(n, _MAP_CONCURRENCY)
+
+    if max_workers <= 1:
+        # Single chunk or concurrency disabled — direct call, no pool overhead
+        chunk_summaries: List[str] = []
+        for i, chunk in enumerate(chunks, 1):
+            summary = prompts.summarize_chunk(chunk=chunk, chunk_index=i, total_chunks=n)
+            if summary.strip():
+                chunk_summaries.append(summary.strip())
+            log.info("Map-reduce: chunk %d/%d summarized (%d chars → %d chars).", i, n, len(chunk), len(summary))
+    else:
+        log.info("Map-reduce: parallelizing %d chunks with %d workers.", n, max_workers)
+        chunk_results: dict[int, str] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_to_idx = {}
+            for i, chunk in enumerate(chunks, 1):
+                fut = pool.submit(
+                    prompts.summarize_chunk,
+                    chunk=chunk,
+                    chunk_index=i,
+                    total_chunks=n,
+                )
+                future_to_idx[fut] = (i, chunk)
+            for fut in as_completed(future_to_idx):
+                idx, chunk = future_to_idx[fut]
+                summary = fut.result()  # propagates exceptions
+                log.info(
+                    "Map-reduce: chunk %d/%d summarized (%d chars → %d chars).",
+                    idx,
+                    n,
+                    len(chunk),
+                    len(summary),
+                )
+                if summary.strip():
+                    chunk_results[idx] = summary.strip()
+        # Reassemble in original chunk order
+        chunk_summaries = [chunk_results[i] for i in sorted(chunk_results.keys())]
 
     if not chunk_summaries:
         raise ValueError("Map-reduce produced no chunk summaries.")

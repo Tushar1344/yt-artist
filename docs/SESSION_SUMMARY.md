@@ -1,6 +1,6 @@
 # yt-artist Development Session Summary
 
-*Comprehensive summary of all 13 development sessions.*
+*Comprehensive summary of all 14 development sessions.*
 
 ---
 
@@ -406,6 +406,46 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 
 ---
 
+## Session 14: Parallelism for Scoring + Map-Reduce (414 tests)
+
+**Goal:** Eliminate two remaining sequential bottlenecks identified during async audit.
+
+### Changes to `cli.py`
+
+- `_cmd_score()`: replaced sequential `for` loop with `ThreadPoolExecutor` + `_ProgressCounter`
+- Uses existing `--concurrency` global arg (clamped to [1, MAX_CONCURRENCY=3])
+- Added `--dry-run` support to score command (was the only bulk command missing it)
+- Background job integration via `_ProgressCounter(job_id=_bg_job_id, ...)`
+
+### Changes to `summarizer.py`
+
+- `_summarize_map_reduce()`: map phase parallelized with `ThreadPoolExecutor`
+- New constant `_MAP_CONCURRENCY` (default 3, env var `YT_ARTIST_MAP_CONCURRENCY`)
+- Single-chunk fast path skips pool overhead
+- Results reassembled in original chunk order (keyed by index)
+
+### New tests (9 tests)
+
+| Test | Module | Purpose |
+|------|--------|---------|
+| `test_parallel_produces_correct_output` | test_chunked_summarize | Parallel map path, correct reduce call |
+| `test_chunk_ordering_preserved` | test_chunked_summarize | Variable-delay chunks → ordered reassembly |
+| `test_chunk_error_propagates` | test_chunked_summarize | One chunk failure → exception propagation |
+| `test_concurrency_one_uses_sequential_path` | test_chunked_summarize | `_MAP_CONCURRENCY=1` → no pool |
+| `test_single_chunk_skips_pool` | test_chunked_summarize | Single chunk → sequential regardless of setting |
+| `test_parallel_scoring_produces_correct_results` | test_scorer | Concurrent scoring scores all summaries |
+| `test_score_error_does_not_block_others` | test_scorer | Error isolation: 1 failure, 2 succeed |
+| `test_score_dry_run` | test_scorer | `--dry-run` prints count, no DB writes |
+| `test_score_single_concurrency_regression` | test_scorer | `concurrency=1` still works |
+
+### Design decisions
+
+- **Custom parallel loop** in `_cmd_score()` (not `_run_bulk()`) because score needs richer per-item output (quality, faithfulness, verification, LOW FAITHFULNESS markers)
+- **Nested ThreadPoolExecutors**: map-reduce runs inside `_run_bulk()` workers; Python allows this, total threads bounded at 3 × 3 = 12
+- **Ollama note**: local Ollama processes requests sequentially; parallel chunks only help against OpenAI API. Users can set `YT_ARTIST_MAP_CONCURRENCY=1` to disable
+
+---
+
 ## Final Project State
 
 ### Source code (~6,000 lines across 16 modules)
@@ -429,16 +469,16 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (28 modules, 405 tests)
+### Tests (28 modules, 414 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
-| `test_scorer.py` | 53 | Quality scoring: heuristic, LLM, entity, faithfulness, verification, DB |
+| `test_scorer.py` | 57 | Quality scoring: heuristic, LLM, entity, faithfulness, verification, parallel, dry-run |
 | `test_background_jobs.py` | 32+ | Background jobs, progress, CLI integration, retry |
 | `test_onboarding.py` | 22 | Hints, quickstart, quiet flag, first-run |
 | `test_rate_limit.py` | 19 | Rate logging, thresholds, warnings, migration |
 | `test_url_validation.py` | 18 | Channel/video URL validation, error detection |
-| `test_chunked_summarize.py` | 18 | Chunking, map-reduce, refine, strategies |
+| `test_chunked_summarize.py` | 23 | Chunking, map-reduce, refine, strategies, parallel map |
 | `test_status.py` | 18 | Status command, count methods, format_size |
 | `test_pipeline.py` | 17 | Pipeline happy path, errors, progress, termination |
 | `test_parallel.py` | 16 | Parallel execution, progress counter |

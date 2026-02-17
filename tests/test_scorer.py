@@ -1,4 +1,4 @@
-"""Tests for scorer.py — heuristic + LLM quality scoring."""
+"""Tests for scorer.py — heuristic + LLM quality scoring, parallel scoring CLI."""
 
 from unittest.mock import MagicMock, patch
 
@@ -628,3 +628,143 @@ class TestVerificationScoreStored:
             assert "verification_score" in names
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Parallel scoring via _cmd_score (CLI integration)
+# ---------------------------------------------------------------------------
+
+
+def _setup_score_data(store, n_videos: int = 3) -> str:
+    """Create artist + videos + transcripts + summaries for scoring tests."""
+    store.upsert_artist(
+        artist_id="@score",
+        name="Score",
+        channel_url="https://youtube.com/@score",
+        urllist_path="data/score",
+    )
+    for i in range(1, n_videos + 1):
+        vid = f"sv{i}"
+        store.upsert_video(artist_id="@score", video_id=vid, url=f"https://youtube.com/watch?v={vid}", title=f"V{i}")
+        store.save_transcript(video_id=vid, raw_text=f"Transcript for video {i}. " * 200)
+        store.upsert_summary(
+            video_id=vid,
+            prompt_id="default",
+            content=f"Summary for video {i}. With multiple sentences. And details.",
+        )
+    return "@score"
+
+
+class TestParallelScoring:
+    @patch("yt_artist.scorer.prompts.score_summary")
+    def test_parallel_scoring_produces_correct_results(self, mock_score, store, capsys):
+        """Concurrent scoring with concurrency=2 scores all summaries."""
+        import argparse
+
+        from yt_artist.cli import _cmd_score
+
+        mock_score.return_value = _mock_score_rating(4, 4, 4)
+        artist_id = _setup_score_data(store, 3)
+
+        args = argparse.Namespace(
+            artist_id=artist_id,
+            prompt_id="default",
+            skip_llm=False,
+            verify=False,
+            dry_run=False,
+            concurrency=2,
+        )
+        _cmd_score(args, store, data_dir=None)
+
+        captured = capsys.readouterr()
+        assert "Scored 3 summaries" in captured.out
+        # All 3 videos scored in DB
+        for i in range(1, 4):
+            rows = store.get_summaries_for_video(f"sv{i}")
+            assert rows[0]["quality_score"] is not None
+
+    @patch("yt_artist.scorer.score_video_summary")
+    def test_score_error_does_not_block_others(self, mock_svs, store, capsys):
+        """Error on one video doesn't prevent others from scoring."""
+        import argparse
+
+        from yt_artist.cli import _cmd_score
+
+        def _selective_svs(video_id, prompt_id, storage, **kwargs):
+            """Raise only for sv2."""
+            if video_id == "sv2":
+                raise RuntimeError("LLM exploded")
+            return {
+                "quality_score": 0.75,
+                "heuristic_score": 0.8,
+                "llm_score": 0.7,
+                "faithfulness_score": None,
+                "verification_score": None,
+            }
+
+        mock_svs.side_effect = _selective_svs
+        artist_id = _setup_score_data(store, 3)
+
+        args = argparse.Namespace(
+            artist_id=artist_id,
+            prompt_id="default",
+            skip_llm=False,
+            verify=False,
+            dry_run=False,
+            concurrency=2,
+        )
+        _cmd_score(args, store, data_dir=None)
+
+        captured = capsys.readouterr()
+        # 2 scored, 1 error
+        assert "Scored 2 summaries" in captured.out
+        assert "1 errors" in captured.out
+
+    def test_score_dry_run(self, store, capsys):
+        """--dry-run prints count without scoring."""
+        import argparse
+
+        from yt_artist.cli import _cmd_score
+
+        artist_id = _setup_score_data(store, 2)
+
+        args = argparse.Namespace(
+            artist_id=artist_id,
+            prompt_id="default",
+            skip_llm=False,
+            verify=False,
+            dry_run=True,
+            concurrency=1,
+        )
+        _cmd_score(args, store, data_dir=None)
+
+        captured = capsys.readouterr()
+        assert "Would score 2 summaries" in captured.out
+        # No DB writes
+        unscored = store.get_unscored_summaries("default")
+        artist_videos = {v["id"] for v in store.list_videos(artist_id)}
+        still_unscored = [r for r in unscored if r["video_id"] in artist_videos]
+        assert len(still_unscored) == 2
+
+    @patch("yt_artist.scorer.prompts.score_summary")
+    def test_score_single_concurrency_regression(self, mock_score, store, capsys):
+        """concurrency=1 still works correctly (sequential within pool)."""
+        import argparse
+
+        from yt_artist.cli import _cmd_score
+
+        mock_score.return_value = _mock_score_rating(4, 4, 4)
+        artist_id = _setup_score_data(store, 2)
+
+        args = argparse.Namespace(
+            artist_id=artist_id,
+            prompt_id="default",
+            skip_llm=False,
+            verify=False,
+            dry_run=False,
+            concurrency=1,
+        )
+        _cmd_score(args, store, data_dir=None)
+
+        captured = capsys.readouterr()
+        assert "Scored 2 summaries" in captured.out

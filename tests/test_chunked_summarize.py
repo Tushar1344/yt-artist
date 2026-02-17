@@ -209,6 +209,87 @@ class TestRefine:
 # ---------------------------------------------------------------------------
 
 
+class TestParallelMapReduce:
+    """Tests for parallelized map phase in _summarize_map_reduce."""
+
+    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
+    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    def test_parallel_produces_correct_output(self, mock_chunk, mock_reduce):
+        """Multiple chunks with concurrency > 1 → parallel path, correct result."""
+        mock_chunk.side_effect = lambda chunk, chunk_index, total_chunks: f"Summary {chunk_index}"
+        mock_reduce.return_value = "Final"
+        long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
+        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video")
+        assert mock_chunk.call_count >= 2
+        mock_reduce.assert_called_once()
+        assert result == "Final"
+
+    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
+    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    def test_chunk_ordering_preserved(self, mock_chunk, mock_reduce):
+        """Parallel results reassembled in original chunk order."""
+        import time
+
+        def _delayed_chunk(chunk, chunk_index, total_chunks):
+            # Odd chunks take longer → finish out of order
+            if chunk_index % 2 == 1:
+                time.sleep(0.02)
+            return f"Summary-{chunk_index}"
+
+        mock_chunk.side_effect = _delayed_chunk
+        mock_reduce.side_effect = lambda section_summaries, artist, video_title: section_summaries
+
+        long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
+        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video")
+        # The reduce receives sections in order: Section 1, Section 2, ...
+        sections = result.split("\n\n---\n\n")
+        for i, section in enumerate(sections, 1):
+            assert section.startswith(f"Section {i}:")
+            assert f"Summary-{i}" in section
+
+    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    def test_chunk_error_propagates(self, mock_chunk):
+        """Exception in one chunk propagates (pool shuts down)."""
+
+        def _failing_chunk(chunk, chunk_index, total_chunks):
+            if chunk_index == 2:
+                raise RuntimeError("LLM exploded on chunk 2")
+            return f"Summary {chunk_index}"
+
+        mock_chunk.side_effect = _failing_chunk
+        long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
+        with pytest.raises(RuntimeError, match="LLM exploded"):
+            _summarize_map_reduce(long_text, 2000, "Artist", "Video")
+
+    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
+    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 1)
+    def test_concurrency_one_uses_sequential_path(self, mock_chunk, mock_reduce):
+        """_MAP_CONCURRENCY=1 → sequential path (no ThreadPoolExecutor)."""
+        mock_chunk.return_value = "Chunk summary"
+        mock_reduce.return_value = "Final"
+        long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
+        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video")
+        assert mock_chunk.call_count >= 2
+        assert result == "Final"
+
+    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
+    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    def test_single_chunk_skips_pool(self, mock_chunk, mock_reduce):
+        """Single chunk → max_workers=1 → sequential path regardless of _MAP_CONCURRENCY."""
+        mock_chunk.return_value = "Only chunk"
+        mock_reduce.return_value = "Final"
+        # Short enough for 1 chunk
+        text = "Short text that fits in one chunk."
+        result = _summarize_map_reduce(text, 10000, "Artist", "Video")
+        assert mock_chunk.call_count == 1
+        assert result == "Final"
+
+
 class TestStrategies:
     def test_valid_strategies(self):
         assert "auto" in STRATEGIES
