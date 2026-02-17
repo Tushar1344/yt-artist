@@ -1,6 +1,6 @@
 # The yt-artist Development Journey: Building a CLI Tool with Human-AI Collaboration
 
-*A record of iterative, collaborative development between a human developer and Claude across 10 sessions.*
+*A record of iterative, collaborative development between a human developer and Claude across 13 sessions.*
 
 ---
 
@@ -209,18 +209,70 @@ Decoupled from summarization — scoring is a separate pipeline stage.
 
 ---
 
+## Sessions 11-12: BAML Prompt Management
+
+**Focus:** Versioned, typed prompt functions and eliminating hardcoded prompt strings.
+
+**The problem:**
+All LLM prompts were hardcoded as Python string constants scattered across `summarizer.py` and `scorer.py`. Changing a prompt required editing Python source. No version history on prompt wording. No structured inputs/outputs — just raw string interpolation and manual parsing.
+
+**What we built:**
+
+### BAML integration
+- Adopted [BAML](https://github.com/BoundaryML/baml) (Boundary AI Markup Language) for typed prompt functions.
+- 4 `.baml` files in `baml_src/`: prompt definitions with explicit input/output types, Ollama + OpenAI client configs, code generation settings.
+- `baml-cli generate` produces `baml_client/` (auto-generated, gitignored). Prompt changes are git diffs of `.baml` files — no Python editing needed.
+- Thin `prompts.py` adapter: 6 functions wrapping BAML-generated code so the rest of the codebase never imports `baml_client` directly.
+
+### Prompt refactoring
+- `summarizer.py`: removed 4 hardcoded prompt constants, replaced with `prompts.summarize_single_pass()`, `prompts.summarize_chunk()`, `prompts.reduce_chunk_summaries()`, `prompts.refine_summary()`.
+- `scorer.py`: replaced `_LLM_SCORE_PROMPT` + `_parse_llm_rating()` with `prompts.score_summary()` returning typed `ScoreRating` (completeness, coherence, faithfulness as integers). No manual parsing.
+
+**Result:** 382 tests passing. Prompts are now versioned files with git history, typed inputs/outputs, and zero manual string parsing.
+
+**Design principle:** Adapter pattern isolates the codebase from BAML internals. If BAML is ever replaced, only `prompts.py` changes.
+
+---
+
+## Sessions 12-13: Hallucination Guardrails
+
+**Focus:** Prevent and detect hallucinated names, facts, and claims in summaries.
+
+**The trigger:**
+The Huberman Lab willpower episode (`cwakOgHIT0E`, 132K chars) produced a summary attributing the talk to "Elijah Wood" — a name that appeared nowhere in the transcript. Root causes: no faithfulness instructions in prompts, the LLM self-check only saw 2% of the transcript (blind `transcript[:3000]`), and the entity score was averaged away into a single quality number.
+
+**What we built:**
+
+### Tier 1: Prompt hardening (0 extra LLM calls)
+Every `.baml` prompt now includes explicit anti-hallucination instructions: "Only state facts, names, quotes that appear in the transcript. Do not invent or assume any information."
+
+### Tier 2: Scoring guardrails (0 extra LLM calls)
+- **Named entity verification** (`_named_entity_score()`): Regex-extracts proper nouns from summaries (multi-word names like "Elijah Wood", single mid-sentence capitalized words). Filters stopwords (months, days, sentence-start words). Checks each entity against the transcript. Score = verified/total, weight = 0.20 of heuristic score. The Elijah Wood hallucination now scores ~0.0 on this metric.
+- **Stratified transcript sampling** (`_sample_transcript()`): Replaced blind `transcript[:3000]` with start/middle/end sampling (~1000 chars each). The LLM self-check now sees representative content from the entire transcript.
+- **Faithfulness tracking**: The LLM `ScoreRating.faithfulness` is now extracted as a separate `faithfulness_score` column instead of being averaged into `llm_score`. Summaries with faithfulness ≤ 0.4 trigger a warning and CLI marker `[!LOW FAITHFULNESS]`.
+
+### Tier 3: Claim verification (1 extra LLM call, opt-in)
+- `--verify` flag on `score` command. The `VerifyClaims` BAML function extracts 5 factual claims from the summary and cross-references each against the transcript. Returns typed `ClaimVerification[]` with claim text and verified boolean.
+- `verification_score` stored in a new DB column.
+
+**Result:** 405 tests passing (23 new). ADR-0014 documenting the full architecture.
+
+**Key insight from the human:** The 3-tier approach was deliberate: Tier 1 and 2 run on every summary at zero LLM cost. Tier 3 is opt-in because it adds 1 LLM call per summary — users pay only for the verification they need.
+
+---
+
 ## What We Built: By the Numbers
 
 | Metric | Value |
 |--------|-------|
-| Source files | 15 Python modules |
-| Source lines | ~5,400 |
-| Test files | 27 test modules |
-| Total tests | 378 |
-| ADRs | 13 (0001-0013) |
-| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py` |
-| Sessions | 10 |
-| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 |
+| Source files | 16 Python modules + 4 BAML prompt files |
+| Source lines | ~6,000 |
+| Test files | 28 test modules |
+| Total tests | 405 |
+| ADRs | 14 (0001-0014) |
+| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py` |
+| Sessions | 13 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 |
 
 ---
 

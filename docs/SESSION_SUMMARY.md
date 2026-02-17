@@ -1,6 +1,6 @@
 # yt-artist Development Session Summary
 
-*Comprehensive summary of all 10 development sessions.*
+*Comprehensive summary of all 13 development sessions.*
 
 ---
 
@@ -335,33 +335,105 @@ ALTER TABLE summaries ADD COLUMN llm_score REAL;
 
 ---
 
+## Sessions 11-13: BAML Prompt Management + Hallucination Guardrails (405 tests)
+
+**Goal:** Versioned typed prompt functions via BAML; 3-tier hallucination guardrails.
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `baml_src/clients.baml` | Ollama + OpenAI client configs with exponential retry |
+| `baml_src/summarize.baml` | 4 typed prompt functions: SummarizeSinglePass, SummarizeChunk, ReduceChunkSummaries, RefineSummary |
+| `baml_src/score.baml` | ScoreSummary → ScoreRating, VerifyClaims → ClaimVerification[] |
+| `baml_src/generators.baml` | Python/Pydantic code generation config |
+| `src/yt_artist/prompts.py` | Thin adapter: 6 functions wrapping baml_client.b, re-exports types |
+
+### New test module: `test_prompts.py` (11 tests)
+
+- BAML adapter function tests with mocked `baml_client.b`
+- Anti-hallucination content assertions on `.baml` source files
+
+### Changes to `scorer.py` (~380 lines total, up from ~220)
+
+| Function | Purpose |
+|----------|---------|
+| `_named_entity_score(summary, transcript)` | Regex-extract proper nouns, verify against transcript |
+| `_sample_transcript(transcript, max_excerpt)` | Stratified sampling: start + middle + end segments |
+| `verify_claims(summary, transcript, model)` | BAML VerifyClaims → ClaimVerification[], verification_score |
+
+**Other changes:**
+- `heuristic_score()`: rebalanced weights — 0.25 length, 0.15 repetition, 0.25 coverage, 0.15 structure, 0.20 entity
+- `llm_score()`: return type changed from `Optional[float]` → `Optional[Dict[str, float]]` (keys: `llm_score`, `faithfulness`)
+- `score_summary()`: added `verify: bool = False` param, faithfulness warning when ≤ 0.4
+- `score_video_summary()`: forwards `verify` param, passes faithfulness and verification scores to storage
+
+### Changes to `summarizer.py`
+
+- Removed 4 hardcoded prompt constants (`_MAP_PROMPT`, `_REDUCE_PROMPT_PREFIX`, `_REFINE_PROMPT`, inline system prompt)
+- All LLM calls now go through `prompts.*` functions
+
+### Schema changes
+
+```sql
+ALTER TABLE summaries ADD COLUMN faithfulness_score REAL;
+ALTER TABLE summaries ADD COLUMN verification_score REAL;
+```
+
+### Storage methods updated
+
+| Method | Changes |
+|--------|---------|
+| `update_summary_scores()` | Added `faithfulness_score`, `verification_score` params |
+| `_migrate_faithfulness_score_column()` | NEW: migration for faithfulness column |
+| `_migrate_verification_score_column()` | NEW: migration for verification column |
+
+### CLI changes
+
+- `score` subparser: `--verify` flag (1 extra LLM call per summary)
+- `_cmd_score`: shows `[!LOW FAITHFULNESS]` marker when faithfulness ≤ 0.4, `verified=80%` when verification ran
+
+### Test updates
+
+- `test_scorer.py`: 53 tests (up from 35) — entity score, sampling, faithfulness, verification, DB integration
+- `test_chunked_summarize.py`, `test_summarizer.py`: updated mocks for prompts module
+- `test_r8_empty_summary.py`, `test_ux_improvements.py`: minor mock path updates
+
+### Documentation
+
+- ADR-0014: BAML prompt management and hallucination guardrails
+- Architecture diagrams updated with 2 new diagrams (#15 BAML, #16 Guardrails)
+
+---
+
 ## Final Project State
 
-### Source code (~5,400 lines across 15 modules)
+### Source code (~6,000 lines across 16 modules)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
 | `cli.py` | ~1,500 | CLI entry point, all commands, argparse, progress counter |
-| `storage.py` | ~650 | SQLite ORM, migrations, all CRUD operations |
+| `storage.py` | ~700 | SQLite ORM, migrations, all CRUD operations |
 | `jobs.py` | 424 | Background job management |
 | `transcriber.py` | 404 | Video transcription via yt-dlp subtitles |
+| `scorer.py` | ~380 | Quality scoring: heuristic + LLM self-check + entity verify + claim verify |
 | `summarizer.py` | ~330 | LLM-powered summarization with chunking strategies |
-| `scorer.py` | ~220 | Quality scoring: heuristic + LLM self-check |
 | `fetcher.py` | 254 | Channel URL fetching, artist/video resolution |
 | `yt_dlp_util.py` | 256 | yt-dlp configuration, URL validation, auth helpers |
 | `pipeline.py` | ~240 | 3-stage producer-consumer pipeline |
 | `llm.py` | 182 | OpenAI/Ollama client with caching and retry |
 | `mcp_server.py` | 110 | MCP server for IDE integration |
 | `rate_limit.py` | 85 | YouTube rate-limit tracking and warnings |
+| `prompts.py` | 75 | BAML adapter: 6 typed prompt functions |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (27 modules, 378 tests)
+### Tests (28 modules, 405 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
-| `test_scorer.py` | 35 | Quality scoring: heuristic, LLM, DB integration |
+| `test_scorer.py` | 53 | Quality scoring: heuristic, LLM, entity, faithfulness, verification, DB |
 | `test_background_jobs.py` | 32+ | Background jobs, progress, CLI integration, retry |
 | `test_onboarding.py` | 22 | Hints, quickstart, quiet flag, first-run |
 | `test_rate_limit.py` | 19 | Rate logging, thresholds, warnings, migration |
@@ -376,9 +448,10 @@ ALTER TABLE summaries ADD COLUMN llm_score REAL;
 | `test_storage.py` | ~20 | Storage CRUD, migration, constraints |
 | `test_llm_connectivity.py` | ~15+ | LLM retry, connectivity, error handling |
 | `test_yt_dlp_util.py` | 18 | Rate-limit config, cookies, delays, PO token, auth |
+| `test_prompts.py` | 11 | BAML adapter functions, anti-hallucination content checks |
 | Others | ~30+ | Fetcher, transcriber, summarizer, edge cases |
 
-### Architecture decisions (13 ADRs)
+### Architecture decisions (14 ADRs)
 
 | ADR | Title |
 |-----|-------|
@@ -395,6 +468,7 @@ ALTER TABLE summaries ADD COLUMN llm_score REAL;
 | 0011 | Parallel execution with ThreadPoolExecutor |
 | 0012 | Pipeline parallelism for bulk transcribe + summarize |
 | 0013 | Long-transcript summarization strategies and quality scoring |
+| 0014 | BAML prompt management and hallucination guardrails |
 
 ---
 

@@ -2,55 +2,66 @@
 
 ## 1. High-Level Module Dependency Graph
 
-```
-                        +-------------------+
-                        |    CLI (cli.py)    |  <-- User entry point
-                        |  argparse-based    |
-                        |  hints, quickstart |
-                        |  --bg, --quiet     |
-                        +--------+----------+
-                                 |
-         +-----------+-----------+-----------+-----------+-----------+
-         |           |           |           |           |           |
-         v           v           v           v           v           v
-  +-----------+ +-----------+ +-----------+ +-----------+ +-----------+ +-----------+
-  |fetcher.py | |transcriber| |summarizer | |scorer.py  | | jobs.py   | |yt_dlp_util|
-  |yt-dlp     | |.py        | |.py        | |heuristic +| |background | |.py        |
-  |--flat-    | |yt-dlp     | |template + | |LLM self-  | |launch,    | |cmd builder|
-  | playlist  | |--write-sub| |LLM call   | |check      | |list,stop, | |sleep,delay|
-  +-----------+ +-----------+ |strategies | |quality    | |attach,    | |cookies,   |
-       |             |        |map-reduce | |scoring    | |retry,     | |concurrency|
-       |             |        |refine     | +-----------+ |cleanup    | +-----------+
-       |             |        +-----------+      |        +-----------+      |
-       |             |             |             |             |             |
-       |             |          +--+--+          |             |             |
-       |             |          |     |          |             |             |
-       v             v          v     v          v             v             |
-  +-------------------------------------------+  +----------+               |
-  |           storage.py (Storage)            |  | llm.py   |               |
-  |  SQLite CRUD: artists, videos,            |  | OpenAI / |               |
-  |  transcripts, prompts, summaries, jobs,   |  | Ollama   |               |
-  |  request_log. Migrations, WAL mode.       |  | (cached, |               |
-  +-------------------------------------------+  |  retry)  |               |
-                     |                            +----------+               |
-                     v                                                       |
-           +-------------------+                                             |
-           |   schema.sql      |            Used by transcriber, fetcher ----+
-           |   init_db.py      |
-           +-------------------+
+```mermaid
+graph TD
+    CLI["CLI (cli.py)<br/>argparse, hints, quickstart<br/>--bg, --quiet, --verify"]
 
-  +-----------------+     +-------------------+     +-------------------+
-  | pipeline.py     |     | rate_limit.py     |     | artist_prompt.py  |
-  | 3-stage         |     | request_log table |     | (DuckDuckGo +     |
-  | producer-       |     | threshold warnings|     |  LLM about text)  |
-  | consumer        |     | auto-cleanup      |     +-------------------+
-  | (transcribe ->  |     +-------------------+
-  |  summarize ->   |
-  |  score)         |     +-------------------+
-  +-----------------+     | mcp_server.py     |
-                          | (FastMCP wrapper)  |
-                          | Same pipeline     |
-                          +-------------------+
+    subgraph Core Modules
+        FETCH["fetcher.py<br/>yt-dlp --flat-playlist"]
+        TRANS["transcriber.py<br/>yt-dlp --write-sub"]
+        SUMM["summarizer.py<br/>strategies: map-reduce, refine"]
+        SCORE["scorer.py<br/>heuristic + LLM self-check<br/>entity verify + faithfulness"]
+        JOBS["jobs.py<br/>background launch/list<br/>stop/attach/retry/clean"]
+        YTDLP["yt_dlp_util.py<br/>cmd builder, sleep<br/>delay, cookies, concurrency"]
+    end
+
+    subgraph BAML Prompt Layer
+        PROMPTS["prompts.py<br/>BAML adapter (6 functions)"]
+        BAMLCLIENT["baml_client/<br/>(auto-generated)"]
+        BAMLSRC["baml_src/*.baml<br/>(git-versioned)"]
+    end
+
+    subgraph Data Layer
+        STORAGE["storage.py<br/>SQLite CRUD, migrations, WAL"]
+        SCHEMA["schema.sql + init_db.py"]
+    end
+
+    subgraph Support Modules
+        PIPELINE["pipeline.py<br/>3-stage producer-consumer"]
+        RATE["rate_limit.py<br/>request_log, thresholds"]
+        ARTIST["artist_prompt.py<br/>DuckDuckGo + LLM about"]
+        MCP["mcp_server.py<br/>FastMCP wrapper"]
+        LLM["llm.py<br/>OpenAI / Ollama<br/>cached client, retry"]
+    end
+
+    CLI --> FETCH
+    CLI --> TRANS
+    CLI --> SUMM
+    CLI --> SCORE
+    CLI --> JOBS
+    CLI --> YTDLP
+
+    SUMM --> PROMPTS
+    SCORE --> PROMPTS
+    PROMPTS --> BAMLCLIENT
+    BAMLSRC -- "baml-cli generate" --> BAMLCLIENT
+
+    FETCH --> STORAGE
+    TRANS --> STORAGE
+    SUMM --> STORAGE
+    SCORE --> STORAGE
+    JOBS --> STORAGE
+    STORAGE --> SCHEMA
+
+    SUMM --> LLM
+    SCORE --> LLM
+
+    TRANS --> YTDLP
+    FETCH --> YTDLP
+
+    PIPELINE --> TRANS
+    PIPELINE --> SUMM
+    PIPELINE --> SCORE
 ```
 
 ## 2. Data Flow: End-to-End Pipeline
@@ -97,7 +108,7 @@
   |     - refine: iterative rolling summary          |
   |  3. Load prompt template                         |
   |  4. Fill {artist},{video},{intent},{audience}     |
-  |  5. LLM.complete() -> summary (cached client)    |
+  |  5. BAML prompt via prompts.py (cached client)   |
   |  6. Upsert to summaries table                    |
   |  7. Update ProgressCounter (+ jobs DB if --bg)   |
   +--------------------------------------------------+
@@ -107,92 +118,121 @@
                                             |  score()       |
   +-----------------------------------------+                |
   |  1. Load summary + transcript from DB   |  Heuristic +   |
-  |  2. Heuristic score (instant):          |  LLM self-     |
-  |     - Length ratio                       |  check         |
-  |     - Repetition detection              +--------+-------+
-  |     - Key-term coverage                          |
-  |     - Structure analysis                         |
-  |  3. LLM self-check (1 tiny call):               |
-  |     - Rate completeness/coherence/               |
-  |       faithfulness 1-5                           |
-  |  4. Combined: 0.4*heuristic + 0.6*llm           |
-  |  5. Update summaries table with scores           |
-  +--------------------------------------------------+
+  |  2. Heuristic score (instant, 5 subs):  |  LLM self-     |
+  |     - Length ratio         (0.25)        |  check +       |
+  |     - Repetition detection (0.15)        |  entity verify |
+  |     - Key-term coverage    (0.25)        +--------+-------+
+  |     - Structure analysis   (0.15)                 |
+  |     - Named entity verify  (0.20)                 |
+  |  3. LLM self-check (1 call, BAML typed):          |
+  |     - ScoreSummary -> ScoreRating                  |
+  |     - completeness, coherence, faithfulness 1-5    |
+  |     - Uses _sample_transcript (start/mid/end)      |
+  |     - faithfulness tracked separately in DB        |
+  |  4. Combined: 0.4*heuristic + 0.6*llm             |
+  |  5. (Optional) --verify: claim verification        |
+  |     - VerifyClaims BAML -> ClaimVerification[]     |
+  |     - 1 extra LLM call, verification_score in DB   |
+  |  6. Update summaries table with all scores         |
+  +----------------------------------------------------+
 ```
 
 ## 3. Data Model (Entity Relationship)
 
-```
-  +-------------------+       +-------------------+
-  |     artists       |       |     prompts       |
-  +-------------------+       +-------------------+
-  | id (PK, TEXT)     |       | id (PK, TEXT)     |
-  | name              |       | name              |
-  | channel_url       |       | template          |
-  | urllist_path      |       | artist_component  |
-  | created_at        |       | video_component   |
-  | default_prompt_id-+--FK-->| intent_component  |
-  | about             |       | audience_component|
-  +--------+----------+       +---------+---------+
-           |                            |
-           | 1:N                        |
-           v                            |
-  +--------+----------+                 |
-  |     videos        |                 |
-  +-------------------+                 |
-  | id (PK, TEXT)     |                 |
-  | artist_id (FK)    |                 |
-  | url               |                 |
-  | title             |                 |
-  | fetched_at        |                 |
-  +--------+----------+                 |
-           |                            |
-           | 1:1           1:N          |
-           v               |            |
-  +--------+----------+    |            |
-  |   transcripts     |    |            |
-  +-------------------+    |            |
-  | video_id (PK, FK) |    |            |
-  | raw_text          |    |            |
-  | format            |    |            |
-  | created_at        |    |            |
-  +-------------------+    |            |
-                           |            |
-           +---------------+            |
-           |                            |
-  +--------+----------+                 |
-  |    summaries      |                 |
-  +-------------------+                 |
-  | id (PK, AUTO)     |                 |
-  | video_id (FK)  ---+-- FK to videos  |
-  | prompt_id (FK) ---+-- FK to prompts-+
-  | content           |
-  | created_at        |
-  | quality_score     |  <-- 0.0-1.0 combined score
-  | heuristic_score   |  <-- 0.0-1.0 instant scoring
-  | llm_score         |  <-- 0.0-1.0 LLM self-check
-  | UNIQUE(video_id,  |
-  |        prompt_id) |
-  +-------------------+
+```mermaid
+erDiagram
+    artists {
+        TEXT id PK
+        TEXT name
+        TEXT channel_url
+        TEXT urllist_path
+        TEXT created_at
+        TEXT default_prompt_id FK
+        TEXT about
+    }
 
-  +-------------------+    +-------------------+    +-------------------+
-  |   screenshots     |    |   video_stats     |    |      jobs         |
-  +-------------------+    +-------------------+    +-------------------+
-  | id (PK, AUTO)     |    | video_id (PK, FK) |    | id (PK, TEXT)     |
-  | video_id (FK)     |    | view_count        |    | command           |
-  | timestamp_sec     |    | most_replayed     |    | status            |
-  | transcript_snippet|    +-------------------+    | pid               |
-  | file_path         |    (Future tables)          | log_file          |
-  +-------------------+                             | started_at        |
-                                                    | finished_at       |
-                           +-------------------+    | total, done,      |
-                           |   request_log     |    | errors            |
-                           +-------------------+    | error_message     |
-                           | id (PK, AUTO)     |    +-------------------+
-                           | timestamp         |
-                           | request_type      |
-                           +-------------------+
+    videos {
+        TEXT id PK
+        TEXT artist_id FK
+        TEXT url
+        TEXT title
+        TEXT fetched_at
+    }
+
+    transcripts {
+        TEXT video_id PK "FK to videos"
+        TEXT raw_text
+        TEXT format
+        TEXT created_at
+    }
+
+    prompts {
+        TEXT id PK
+        TEXT name
+        TEXT template
+        TEXT artist_component
+        TEXT video_component
+        TEXT intent_component
+        TEXT audience_component
+    }
+
+    summaries {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT video_id FK
+        TEXT prompt_id FK
+        TEXT content
+        TEXT created_at
+        REAL quality_score "0.0-1.0 combined"
+        REAL heuristic_score "0.0-1.0 instant"
+        REAL llm_score "0.0-1.0 LLM self-check"
+        REAL faithfulness_score "0.0-1.0 from LLM rating"
+        REAL verification_score "0.0-1.0 from --verify"
+    }
+
+    screenshots {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT video_id FK
+        REAL timestamp_sec
+        TEXT transcript_snippet
+        TEXT file_path
+    }
+
+    video_stats {
+        TEXT video_id PK "FK to videos"
+        INTEGER view_count
+        TEXT most_replayed
+    }
+
+    jobs {
+        TEXT id PK
+        TEXT command
+        TEXT status
+        INTEGER pid
+        TEXT log_file
+        TEXT started_at
+        TEXT finished_at
+        INTEGER total
+        INTEGER done
+        INTEGER errors
+        TEXT error_message
+    }
+
+    request_log {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT timestamp
+        TEXT request_type
+    }
+
+    artists ||--o{ videos : "has"
+    artists }o--o| prompts : "default_prompt_id"
+    videos ||--o| transcripts : "has"
+    videos ||--o{ summaries : "has"
+    videos ||--o{ screenshots : "has (future)"
+    videos ||--o| video_stats : "has (future)"
+    prompts ||--o{ summaries : "used by"
 ```
+
+Indexes: `idx_videos_artist_id`, `idx_summaries_video_id`, `idx_summaries_prompt_id`, `idx_screenshots_video_id`, `idx_jobs_status`, `idx_request_log_timestamp`. Summaries has `UNIQUE(video_id, prompt_id)`.
 
 ## 4. CLI Command Dispatch
 
@@ -224,85 +264,107 @@
 
   Each command handler: _cmd_<name>(args, storage, data_dir)
   After each command: _hint() prints next-step to stderr (unless -q)
+
+  Notable flags:
+    score --verify    Run claim verification (1 extra LLM call per summary)
+    score --skip-llm  Heuristic-only scoring (zero LLM calls)
 ```
 
 ## 5. Dependency Auto-Creation Chain
 
-```
-  summarize(video)
-       |
-       +-- artist in DB? --NO--> ensure_artist_and_video_for_video_url()
-       |                              |
-       |                              +-- yt-dlp -j (single video metadata)
-       |                              +-- fetch_channel() (full channel)
-       |                              +-- upsert artist + all videos
-       |
-       +-- transcript in DB? --NO--> transcribe()
-       |                                 |
-       |                                 +-- yt-dlp --write-auto-subs (optimistic)
-       |                                 +-- fallback: --write-subs (manual)
-       |                                 +-- parse subtitles, dedup lines
-       |                                 +-- save_transcript()
-       |
-       +-- resolve prompt_id
-       |      |
-       |      +-- --prompt flag? --> use it
-       |      +-- artist default? --> use it
-       |      +-- env YT_ARTIST_DEFAULT_PROMPT? --> use it
-       |      +-- first prompt in DB? --> use it
-       |      +-- none? --> SystemExit
-       |
-       +-- choose strategy (auto/truncate/map-reduce/refine)
-       |      |
-       |      +-- auto (default): fits context? --> single-pass
-       |      |                    too long? --> map-reduce
-       |      +-- truncate: cut at MAX_TRANSCRIPT_CHARS
-       |      +-- map-reduce: chunk -> summarize each -> combine -> reduce
-       |      +-- refine: iterative rolling summary across chunks
-       |
-       +-- _fill_template() + llm.complete() (cached client, retry)
-       +-- upsert_summary()
+```mermaid
+flowchart TD
+    START["summarize(video)"]
+
+    HAS_ARTIST{"Artist in DB?"}
+    ENSURE["ensure_artist_and_video_for_video_url()<br/>yt-dlp -j → fetch_channel()<br/>upsert artist + all videos"]
+
+    HAS_TRANSCRIPT{"Transcript in DB?"}
+    TRANSCRIBE["transcribe()<br/>yt-dlp --write-auto-subs<br/>fallback: --write-subs<br/>parse + dedup → save_transcript()"]
+
+    RESOLVE_PROMPT{"Resolve prompt_id"}
+    PROMPT_FLAG["--prompt flag"]
+    ARTIST_DEFAULT["Artist default"]
+    ENV_DEFAULT["env YT_ARTIST_DEFAULT_PROMPT"]
+    FIRST_DB["First prompt in DB"]
+    NO_PROMPT["SystemExit: no prompt"]
+
+    CHOOSE_STRATEGY{"Choose strategy"}
+    AUTO["auto: fits → single-pass<br/>too long → map-reduce"]
+    TRUNCATE["truncate: cut at limit"]
+    MAPREDUCE["map-reduce: chunk → map → reduce"]
+    REFINE["refine: iterative rolling summary"]
+
+    EXECUTE["_fill_template() + llm.complete()<br/>→ upsert_summary()"]
+
+    START --> HAS_ARTIST
+    HAS_ARTIST -- "NO" --> ENSURE --> HAS_TRANSCRIPT
+    HAS_ARTIST -- "YES" --> HAS_TRANSCRIPT
+    HAS_TRANSCRIPT -- "NO" --> TRANSCRIBE --> RESOLVE_PROMPT
+    HAS_TRANSCRIPT -- "YES" --> RESOLVE_PROMPT
+
+    RESOLVE_PROMPT --> PROMPT_FLAG
+    PROMPT_FLAG -- "not set" --> ARTIST_DEFAULT
+    ARTIST_DEFAULT -- "not set" --> ENV_DEFAULT
+    ENV_DEFAULT -- "not set" --> FIRST_DB
+    FIRST_DB -- "not set" --> NO_PROMPT
+
+    PROMPT_FLAG -- "found" --> CHOOSE_STRATEGY
+    ARTIST_DEFAULT -- "found" --> CHOOSE_STRATEGY
+    ENV_DEFAULT -- "found" --> CHOOSE_STRATEGY
+    FIRST_DB -- "found" --> CHOOSE_STRATEGY
+
+    CHOOSE_STRATEGY --> AUTO
+    CHOOSE_STRATEGY --> TRUNCATE
+    CHOOSE_STRATEGY --> MAPREDUCE
+    CHOOSE_STRATEGY --> REFINE
+
+    AUTO --> EXECUTE
+    TRUNCATE --> EXECUTE
+    MAPREDUCE --> EXECUTE
+    REFINE --> EXECUTE
 ```
 
 ## 6. Background Job Lifecycle
 
-```
-  User runs: yt-artist --bg transcribe --artist-id @TED
-       |
-       v
-  PARENT PROCESS:
-       |
-       +-- Generate job_id (12 hex chars)
-       +-- Create log file: data/jobs/<job_id>.log
-       +-- INSERT into jobs table (status='running', pid=-1)
-       +-- Build child argv:
-       |     python -m yt_artist.cli transcribe --artist-id @TED --_bg-worker <job_id>
-       +-- subprocess.Popen(start_new_session=True, stdout=log_file)
-       +-- UPDATE jobs SET pid = <child_pid>
-       +-- Print: "Job a1b2c3d4 launched. Use: yt-artist jobs"
-       +-- Exit immediately
-       |
-       v
-  CHILD PROCESS (detached, survives terminal close):
-       |
-       +-- Set _bg_job_id, _bg_storage globals
-       +-- Register SIGTERM handler
-       +-- Run _cmd_transcribe() normally
-       |     +-- _ProgressCounter ticks update jobs table
-       |     +-- Each video: UPDATE jobs SET done=?, errors=?
-       +-- On success: finalize_job(status='completed')
-       +-- On exception: finalize_job(status='failed', error_message=...)
-       +-- On SIGTERM: finalize_job(status='stopped')
-       +-- On crash (OOM): PID dies, detected by list_jobs() later
-       |
-       v
-  USER CHECKS LATER:
-       |
-       +-- yt-artist jobs           --> tabular list with progress
-       +-- yt-artist jobs attach id --> tail -f the log file
-       +-- yt-artist jobs stop id   --> os.kill(pid, SIGTERM)
-       +-- yt-artist jobs retry id  --> re-launch same command
-       +-- yt-artist jobs clean     --> remove old finished jobs + logs
+```mermaid
+flowchart TD
+    USER["yt-artist --bg transcribe --artist-id @TED"]
+
+    subgraph Parent["PARENT PROCESS"]
+        P1["Generate job_id (12 hex chars)"]
+        P2["Create log: data/jobs/job_id.log"]
+        P3["INSERT jobs (status=running, pid=-1)"]
+        P4["subprocess.Popen(start_new_session=True)"]
+        P5["UPDATE jobs SET pid=child_pid"]
+        P6["Print: Job launched. Use: yt-artist jobs"]
+        P7["Exit immediately"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7
+    end
+
+    subgraph Child["CHILD PROCESS (detached)"]
+        C1["Set _bg_job_id, _bg_storage globals"]
+        C2["Register SIGTERM handler"]
+        C3["Run _cmd_transcribe() normally<br/>ProgressCounter → UPDATE jobs"]
+        C1 --> C2 --> C3
+
+        C3 --> SUCCESS["finalize(status=completed)"]
+        C3 --> EXCEPTION["finalize(status=failed,<br/>error_message=...)"]
+        C3 --> SIGTERM["finalize(status=stopped)"]
+        C3 --> CRASH["PID dies (OOM)<br/>detected by list_jobs()"]
+    end
+
+    subgraph Monitor["USER CHECKS LATER"]
+        M1["yt-artist jobs → tabular list"]
+        M2["jobs attach id → tail -f log"]
+        M3["jobs stop id → os.kill SIGTERM"]
+        M4["jobs retry id → re-launch"]
+        M5["jobs clean → remove old jobs"]
+    end
+
+    USER --> Parent
+    P4 -- "fork" --> Child
+    Child --> Monitor
 ```
 
 ## 7. Parallel Execution Model
@@ -337,35 +399,47 @@
 
 ## 8. Pipeline Parallelism (3-Stage)
 
-```
-  Bulk summarize --artist-id @X (missing transcripts + summaries)
-       |
-       v
-  run_pipeline() in pipeline.py (DB-polling coordination)
-       |
-       +---------------------------+---------------------------+
-       |                           |                           |
-       v                           v                           v
-  STAGE 1: Transcribe        STAGE 2: Summarize         STAGE 3: Score
-  ThreadPoolExecutor(1-2)    ThreadPoolExecutor(1-2)    ThreadPoolExecutor(1)
-       |                           |                           |
-       | Downloads subtitles       | Polls DB every 5s for     | Polls DB for
-       | from YouTube              | "transcribed but not      | "summarized but
-       | Writes to DB              |  summarized" videos       |  not scored"
-       |                           | Summarizes with strategy  | Heuristic +
-       |                           | Writes to DB              | LLM self-check
-       |                           |                           | Writes scores
-       v                           v                           v
-  [DB: transcripts]  ------>  [DB: summaries]  -------->  [DB: quality_score]
+```mermaid
+flowchart LR
+    INPUT["Bulk summarize --artist-id @X<br/>(missing transcripts + summaries)"]
+    PIPELINE["run_pipeline()<br/>DB-polling coordination"]
 
-  Key design decisions:
-  - DB-polling (not queue): simpler, idempotent, crash-recoverable
-  - Poller checks every 5s, wakes up in 0.5s increments for responsive shutdown
-  - Concurrency budget split: e.g., 2 total -> 1 transcribe + 1 summarize
-  - Stage 3 runs single-worker (scoring calls are tiny)
-  - Pipeline only activates when bulk summarize finds missing transcripts
-  - Standalone transcribe/summarize commands unchanged
+    subgraph S1["Stage 1: Transcribe"]
+        T_EXEC["ThreadPoolExecutor(1-2)"]
+        T_WORK["Download subtitles<br/>from YouTube"]
+        T_DB[("DB: transcripts")]
+        T_EXEC --> T_WORK --> T_DB
+    end
+
+    subgraph S2["Stage 2: Summarize"]
+        S_EXEC["ThreadPoolExecutor(1-2)"]
+        S_POLL["Poll DB every 5s for<br/>transcribed-not-summarized"]
+        S_DB[("DB: summaries")]
+        S_EXEC --> S_POLL --> S_DB
+    end
+
+    subgraph S3["Stage 3: Score"]
+        SC_EXEC["ThreadPoolExecutor(1)"]
+        SC_POLL["Poll DB for<br/>summarized-not-scored"]
+        SC_DB[("DB: quality_score")]
+        SC_EXEC --> SC_POLL --> SC_DB
+    end
+
+    INPUT --> PIPELINE
+    PIPELINE --> S1
+    PIPELINE --> S2
+    PIPELINE --> S3
+    T_DB -. "triggers" .-> S_POLL
+    S_DB -. "triggers" .-> SC_POLL
 ```
+
+Key design decisions:
+- DB-polling (not queue): simpler, idempotent, crash-recoverable
+- Poller checks every 5s, wakes up in 0.5s increments for responsive shutdown
+- Concurrency budget split: e.g., 2 total → 1 transcribe + 1 summarize
+- Stage 3 runs single-worker (scoring calls are tiny)
+- Pipeline only activates when bulk summarize finds missing transcripts
+- Standalone transcribe/summarize commands unchanged
 
 ## 9. Long-Transcript Summarization Strategies
 
@@ -417,40 +491,65 @@
 ## 10. Quality Scoring Architecture
 
 ```
-  score_summary(summary, transcript, skip_llm=False)
+  score_summary(summary, transcript, skip_llm=False, verify=False)
        |
-       +-- TIER 1: Heuristic (instant, zero LLM cost)
+       +-- HEURISTIC (instant, zero LLM cost)
        |      |
-       |      +-- _length_ratio_score():    summary/transcript length  (weight: 0.3)
+       |      +-- _length_ratio_score():    summary/transcript length  (weight: 0.25)
        |      |     +-- Ideal: 0.02-0.10
        |      |     +-- Too short = under-summarized, too long = regurgitation
        |      |
-       |      +-- _key_term_coverage():     top-N terms from transcript (weight: 0.3)
-       |      |     +-- Extract frequent words, check % in summary
-       |      |
-       |      +-- _repetition_score():      duplicate sentence detection (weight: 0.2)
+       |      +-- _repetition_score():      duplicate sentence detection (weight: 0.15)
        |      |     +-- High repetition = model looping
        |      |
-       |      +-- _structure_score():       multi-sentence, bullets     (weight: 0.2)
+       |      +-- _key_term_coverage():     top-N terms from transcript (weight: 0.25)
+       |      |     +-- Extract frequent words, check % in summary
+       |      |
+       |      +-- _structure_score():       multi-sentence, bullets     (weight: 0.15)
        |      |     +-- Single-line for 2hr episode is suspect
+       |      |
+       |      +-- _named_entity_score():    proper noun verification    (weight: 0.20)
+       |      |     +-- Regex-extract multi-word names ("Elijah Wood", "Stanford")
+       |      |     +-- Filter _ENTITY_STOPWORDS (months, days, sentence-start words)
+       |      |     +-- Check each entity against transcript (case-insensitive)
+       |      |     +-- Return verified_count / total (1.0 if no entities)
+       |      |     +-- Hallucinated name → entity score ≈ 0.0 → pulls heuristic down
        |      |
        |      +-- heuristic_score = weighted average --> 0.0-1.0
        |
        +-- skip_llm? --> quality_score = heuristic_score (done)
        |
-       +-- TIER 2: LLM self-check (1 tiny call)
+       +-- LLM SELF-CHECK (1 call via BAML ScoreSummary)
        |      |
-       |      +-- Prompt: "Rate this summary 1-5 for:
-       |      |     - Completeness, Coherence, Faithfulness
-       |      |     Return three numbers, e.g.: 4 3 5"
+       |      +-- _sample_transcript(transcript, max_excerpt=3000):
+       |      |     +-- Short (≤ 3000): return whole text
+       |      |     +-- Long: ~1000 chars each from start, middle, end
+       |      |     +-- Joined with [...] markers between segments
+       |      |     +-- Replaces old transcript[:3000] blind truncation
        |      |
-       |      +-- _parse_llm_rating(): extract 3 integers
-       |      +-- llm_score = average / 5 --> 0.0-1.0
+       |      +-- prompts.score_summary() → typed ScoreRating:
+       |      |     +-- completeness (1-5), coherence (1-5), faithfulness (1-5)
+       |      |     +-- BAML handles JSON parsing — no manual _parse_llm_rating()
+       |      |
+       |      +-- llm_score = (completeness + coherence + faithfulness) / 15
+       |      +-- faithfulness_score = faithfulness / 5 (tracked separately!)
        |      +-- On LLM failure: fall back to heuristic-only
+       |      +-- faithfulness ≤ 0.4 → log.warning + CLI [!LOW FAITHFULNESS]
        |
        +-- quality_score = 0.4 * heuristic + 0.6 * llm --> 0.0-1.0
        |
-       +-- Store: UPDATE summaries SET quality_score=?, heuristic_score=?, llm_score=?
+       +-- verify=True? (opt-in via --verify flag)
+       |      |
+       |      +-- CLAIM VERIFICATION (1 extra LLM call via BAML VerifyClaims)
+       |      |     +-- _sample_transcript(transcript, max_excerpt=6000)
+       |      |     +-- prompts.verify_claims() → ClaimVerification[]
+       |      |     +-- Each claim: {claim: str, verified: bool}
+       |      |     +-- verification_score = verified_count / total_claims
+       |      |
+       |      +-- On LLM failure: verification_score = None (non-fatal)
+       |
+       +-- Store: UPDATE summaries SET quality_score=?, heuristic_score=?,
+       |          llm_score=?, faithfulness_score=?, verification_score=?
 ```
 
 ## 11. Connection Management Pattern
@@ -472,33 +571,31 @@
 
 ## 12. LLM Client Decision Tree
 
-```
-  get_client()  (cached: reused across summarize calls)
-       |
-       +-- OPENAI_BASE_URL set?
-       |      |
-       |      +-- points to Ollama (port 11434)?
-       |      |      --> api_key = "ollama", use that URL
-       |      |
-       |      +-- other URL?
-       |             --> use OPENAI_API_KEY as-is
-       |
-       +-- OPENAI_BASE_URL not set?
-              |
-              +-- OPENAI_API_KEY set?
-              |      --> base_url = api.openai.com/v1
-              |
-              +-- OPENAI_API_KEY not set?
-                     --> base_url = localhost:11434/v1 (Ollama)
-                     --> api_key = "ollama"
+```mermaid
+flowchart TD
+    START["get_client()<br/>(cached, reused across calls)"]
 
-  Model selection:
-       OPENAI_MODEL env > model param > default
-       default = "mistral" (Ollama) | "gpt-4o-mini" (OpenAI)
+    HAS_URL{"OPENAI_BASE_URL<br/>set?"}
+    IS_OLLAMA{"Points to Ollama<br/>(port 11434)?"}
+    OLLAMA_URL["api_key = 'ollama'<br/>use that URL"]
+    CUSTOM_URL["use OPENAI_API_KEY as-is<br/>use that URL"]
 
-  Client cache invalidated when env vars change between calls.
-  Retry with exponential backoff on transient LLM failures.
+    HAS_KEY{"OPENAI_API_KEY<br/>set?"}
+    OPENAI["base_url = api.openai.com/v1<br/>model default: gpt-4o-mini"]
+    LOCAL["base_url = localhost:11434/v1<br/>api_key = 'ollama'<br/>model default: mistral"]
+
+    MODEL["Model: OPENAI_MODEL env<br/>> model param > default"]
+
+    START --> HAS_URL
+    HAS_URL -- "YES" --> IS_OLLAMA
+    IS_OLLAMA -- "YES" --> OLLAMA_URL --> MODEL
+    IS_OLLAMA -- "NO" --> CUSTOM_URL --> MODEL
+    HAS_URL -- "NO" --> HAS_KEY
+    HAS_KEY -- "YES" --> OPENAI --> MODEL
+    HAS_KEY -- "NO" --> LOCAL --> MODEL
 ```
+
+Client cache invalidated when env vars change between calls. Retry with exponential backoff on transient LLM failures.
 
 ## 13. Onboarding Flow
 
@@ -562,4 +659,115 @@
 
   All layers configurable via environment variables.
   Defaults are conservative: safe for 500+ video channels.
+```
+
+## 15. BAML Prompt Architecture
+
+```
+  Source of Truth (git-versioned):
+
+  baml_src/
+       |
+       +-- clients.baml         Ollama + OpenAI client configs
+       |                        Exponential retry policy
+       |
+       +-- summarize.baml       4 prompt functions:
+       |     +-- SummarizeSinglePass(transcript, artist, video_title) -> string
+       |     +-- SummarizeChunk(chunk, chunk_index, total_chunks) -> string
+       |     +-- ReduceChunkSummaries(section_summaries) -> string
+       |     +-- RefineSummary(prev_summary, chunk, chunk_index, total_chunks) -> string
+       |     +-- All include anti-hallucination: "Do not invent names/facts"
+       |
+       +-- score.baml           2 prompt functions with typed outputs:
+       |     +-- ScoreSummary(transcript_excerpt, summary) -> ScoreRating
+       |     |     ScoreRating { completeness: int, coherence: int, faithfulness: int }
+       |     +-- VerifyClaims(summary, transcript_excerpt) -> ClaimVerification[]
+       |           ClaimVerification { claim: string, verified: bool }
+       |
+       +-- generators.baml      Code generation config (Python/Pydantic)
+
+  Build step:                   Development workflow:
+
+  baml-cli generate             1. Edit .baml files
+       |                        2. Run baml-cli generate
+       v                        3. baml_client/ regenerated
+  baml_client/                  4. prompts.py picks up changes
+  (auto-generated,              5. No Python source editing needed
+   .gitignored)                    for prompt-only changes
+       |
+       v
+  prompts.py (thin adapter)     Codebase-facing API:
+       |
+       +-- summarize_single_pass()    --> summarizer.py
+       +-- summarize_chunk()          --> summarizer.py
+       +-- reduce_chunk_summaries()   --> summarizer.py
+       +-- refine_summary()           --> summarizer.py
+       +-- score_summary()            --> scorer.py
+       +-- verify_claims()            --> scorer.py
+       +-- Re-exports: ScoreRating, ClaimVerification types
+```
+
+## 16. Hallucination Guardrails Stack
+
+```
+  3-tier defense against hallucinated names, facts, and claims.
+  Motivated by: Hubermanlab summary hallucinated "Elijah Wood" as speaker.
+
+  +=========================================================================+
+  | TIER 1: Prompt Hardening (always on, 0 extra LLM calls)                |
+  |-------------------------------------------------------------------------|
+  | Every .baml prompt includes:                                            |
+  |   "Only state facts, names, quotes that appear in the transcript."      |
+  |   "Do not invent or assume any information."                            |
+  | Single source of truth: baml_src/*.baml (git diff shows changes)        |
+  +=========================================================================+
+       |
+       v
+  +=========================================================================+
+  | TIER 2: Scoring Guardrails (always on, 0 extra LLM calls)              |
+  |-------------------------------------------------------------------------|
+  |                                                                         |
+  | A. Named Entity Verification  (_named_entity_score)                     |
+  |    - Regex-extract proper nouns from summary                            |
+  |    - Multi-word: "Elijah Wood", "Stanford University"                   |
+  |    - Single mid-sentence: "...discussed Huberman..."                    |
+  |    - Filter stopwords (months, days, "The", "However")                  |
+  |    - Verify each against transcript (case-insensitive)                  |
+  |    - Score = verified / total (1.0 if no entities)                      |
+  |    - Weight: 0.20 of heuristic score                                    |
+  |                                                                         |
+  | B. Stratified Transcript Sampling  (_sample_transcript)                 |
+  |    - Replaces blind transcript[:3000] with start+middle+end             |
+  |    - ~1000 chars each segment, joined with [...] markers                |
+  |    - Used by LLM self-check AND claim verification                      |
+  |    - LLM sees representative sample from entire transcript              |
+  |                                                                         |
+  | C. Faithfulness Tracking                                                |
+  |    - LLM ScoreRating.faithfulness extracted as separate DB column       |
+  |    - Not averaged away into llm_score anymore                           |
+  |    - faithfulness ≤ 0.4 → log.warning + CLI [!LOW FAITHFULNESS]         |
+  |                                                                         |
+  +=========================================================================+
+       |
+       v
+  +=========================================================================+
+  | TIER 3: Claim Verification (opt-in --verify, 1 extra LLM call)         |
+  |-------------------------------------------------------------------------|
+  | VerifyClaims BAML function:                                             |
+  |   - Extracts 5 factual claims from summary                             |
+  |   - Cross-references each against transcript excerpt                    |
+  |   - Returns ClaimVerification[] (typed: claim + verified bool)          |
+  |   - verification_score = verified_count / total_claims                  |
+  |   - Stored in summaries.verification_score column                       |
+  |   - CLI output: "verified=80%"                                          |
+  +=========================================================================+
+
+  Cost summary:
+  +--------+------------------+----------------------------+
+  | Tier   | Extra LLM Calls  | When                       |
+  +--------+------------------+----------------------------+
+  |   1    |        0         | Always (prompt text only)  |
+  |   2    |        0         | Always (heuristic + reuse) |
+  |   3    |        1         | Only with --verify flag    |
+  +--------+------------------+----------------------------+
 ```

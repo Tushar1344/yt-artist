@@ -8,12 +8,14 @@ Python 3.9+ CLI: fetch YouTube channel videos, transcribe via yt-dlp, summarize 
 - SQLite (WAL mode, FK enforcement) — schema in src/yt_artist/schema.sql
 - yt-dlp subprocess calls for YouTube data
 - openai SDK for LLM (local Ollama or remote OpenAI)
+- baml-py for typed LLM prompt functions (.baml files)
 - pytest + pytest-cov for testing
 - ruff for formatting + linting
 
 ## Layout
 
 - src/yt_artist/ — package source (cli.py is entrypoint, storage.py is DB layer)
+- baml_src/ — BAML prompt definitions (.baml files, git-versioned)
 - tests/ — pytest tests (conftest.py has db_path and store fixtures)
 - scripts/ — install and wrapper scripts
 - docs/ — ADRs, plans, journey, parking lot
@@ -42,6 +44,8 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Pipeline parallelism: producer-consumer with DB-polling in pipeline.py (ADR-0012)
 - Long-transcript strategies: auto/truncate/map-reduce/refine in summarizer.py (ADR-0013)
 - Quality scoring: heuristic + LLM self-check in scorer.py, decoupled 3rd pipeline stage
+- BAML prompts: .baml files → baml-cli generate → baml_client/ → prompts.py adapter (ADR-0014)
+- Hallucination guardrails: entity verification, faithfulness tracking, --verify claim check in scorer.py
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 
