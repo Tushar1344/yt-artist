@@ -1,6 +1,6 @@
 # The yt-artist Development Journey: Building a CLI Tool with Human-AI Collaboration
 
-*A record of iterative, collaborative development between a human developer and Claude across 14 sessions.*
+*A record of iterative, collaborative development between a human developer and Claude across 15 sessions.*
 
 ---
 
@@ -279,18 +279,48 @@ All prompts now include explicit anti-hallucination instructions: "Only state fa
 
 ---
 
+## Session 15: Architecture Review Items 6–9 — Config, Concurrency, JSON, set-about
+
+**Focus:** Final 4 items from the architecture review: env var centralization, concurrency policy centralization, machine-readable output, and simplified artist descriptions.
+
+**What we built:**
+
+### Item 7: config.py — Environment Variable Centralization
+- New `config.py` module with 4 typed frozen dataclasses (`YouTubeConfig`, `LLMConfig`, `AppConfig`, `ConcurrencyConfig`) and `@lru_cache` accessor functions.
+- All 24+ scattered `os.environ.get()` calls across 6 modules now delegate to config.py. No module reads env vars directly.
+- Conftest autouse fixture clears LRU caches between tests.
+
+### Item 6: Concurrency Centralization
+- `ConcurrencyConfig` with `max_concurrency`, `map_concurrency`, and `split_budget()` method.
+- Replaced hardcoded `MAX_CONCURRENCY=3`, `_MAP_CONCURRENCY`, and `_split_concurrency()` across yt_dlp_util.py, summarizer.py, pipeline.py, and cli.py.
+
+### Item 8: `--json` Output Mode
+- Global `--json` flag on CLI with `_json_print()` helper (returns True if JSON printed, enabling early return).
+- 5 commands support JSON: `list-prompts`, `search-transcripts`, `status`, `jobs list`, `doctor`.
+- Doctor collects structured `{"checks": [...], "ok": N, "warn": N, "fail": N}`.
+
+### Item 9: `set-about` Command
+- `yt-artist set-about --artist-id @X "description text"` — directly set artist about text without DuckDuckGo search or LLM calls.
+- Simpler alternative to `build-artist-prompt`. Supports `--json` output.
+
+**Result:** 487 tests passing (37 new). 4 new test modules: test_config.py, test_json_output.py + additions to test_cli.py.
+
+**Design principle:** Config centralization is invisible to users but eliminates a class of bugs (misspelled env var names, inconsistent defaults, duplicated reads). JSON output enables scripting and MCP integration without changing human-readable defaults.
+
+---
+
 ## What We Built: By the Numbers
 
 | Metric | Value |
 |--------|-------|
-| Source files | 17 Python modules + 3 BAML files (scoring only) |
-| Source lines | ~6,100 |
-| Test files | 29 test modules |
-| Total tests | 450 |
+| Source files | 18 Python modules + 3 BAML files (scoring only) |
+| Source lines | ~6,300 |
+| Test files | 31 test modules |
+| Total tests | 487 |
 | ADRs | 14 (0001-0014) |
-| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py`, `paths.py` |
-| Sessions | 14 |
-| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 → 450 |
+| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py`, `paths.py`, `config.py` |
+| Sessions | 15 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 → 450 → 487 |
 
 ---
 

@@ -1,6 +1,6 @@
 # yt-artist Development Session Summary
 
-*Comprehensive summary of all 14 development sessions.*
+*Comprehensive summary of all 15 development sessions.*
 
 ---
 
@@ -446,9 +446,60 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 
 ---
 
+## Session 15: Architecture Review Items 6–9 (487 tests)
+
+**Goal:** Complete the final 4 items from the 9-item architecture review.
+
+### Item 7: config.py — Environment Variable Centralization
+
+**New module: `config.py` (~140 lines)**
+
+| Dataclass | Env vars covered |
+|-----------|-----------------|
+| `YouTubeConfig` | inter_video_delay, sleep_requests, sleep_subtitles, cookies_browser, cookies_file, po_token |
+| `LLMConfig` | base_url, api_key, model, is_ollama (derived) |
+| `AppConfig` | log_level, data_dir_env, db_env, default_prompt, max_transcript_chars, summarize_strategy |
+| `ConcurrencyConfig` | max_concurrency, map_concurrency + `split_budget()` method |
+
+Accessor functions: `get_youtube_config()`, `get_llm_config()`, `get_app_config()`, `get_concurrency_config()` — each `@lru_cache(maxsize=1)`.
+
+**Callers updated:** yt_dlp_util.py, summarizer.py, llm.py, cli.py, mcp_server.py.
+
+**New test module:** test_config.py (15 tests)
+
+### Item 6: Concurrency Centralization
+
+`ConcurrencyConfig.split_budget()` replaces standalone `_split_concurrency()` in pipeline.py. `MAX_CONCURRENCY` in yt_dlp_util.py becomes a backward-compat re-export from config. `_MAP_CONCURRENCY` in summarizer.py replaced with `get_concurrency_config().map_concurrency`.
+
+### Item 8: `--json` Output Mode
+
+**Changes to `cli.py`:**
+- `--json` global flag (`dest="json_output"`)
+- `_json_print(data, args)` helper: returns True if JSON printed
+
+**Commands with JSON support:**
+
+| Command | JSON shape |
+|---------|-----------|
+| `list-prompts` | `[{"id", "name", "template"}]` |
+| `search-transcripts` | `[{"video_id", "artist_id", "transcript_len", "title"}]` |
+| `status` | `{"artists", "videos", "transcribed", ...}` |
+| `jobs list` | `[{"id", "status", "done", "total", "started_at", "command"}]` |
+| `doctor` | `{"checks": [{"name", "status", "message"}], "ok", "warn", "fail"}` |
+
+**New test module:** test_json_output.py (13 tests)
+
+### Item 9: `set-about` Command
+
+**New subcommand:** `set-about --artist-id @X "about text"` — manually set artist description without DuckDuckGo search or LLM calls. Supports `--json` output.
+
+**New tests in test_cli.py:** 3 tests (happy path, unknown artist, JSON output)
+
+---
+
 ## Final Project State
 
-### Source code (~6,100 lines across 17 modules)
+### Source code (~6,300 lines across 18 modules)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
@@ -466,11 +517,12 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `rate_limit.py` | 85 | YouTube rate-limit tracking and warnings |
 | `paths.py` | ~55 | Centralized path construction for runtime data files |
 | `prompts.py` | 48 | BAML adapter: 2 scoring functions (score_summary, verify_claims) |
+| `config.py` | ~140 | Typed frozen dataclasses for all env vars, @lru_cache accessors |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (29 modules, 450 tests)
+### Tests (31 modules, 487 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
@@ -485,7 +537,9 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `test_parallel.py` | 16 | Parallel execution, progress counter |
 | `test_dry_run.py` | 14 | --dry-run for transcribe/summarize bulk/single |
 | `test_ux_improvements.py` | 14 | LLM caching, truncation, default prompt, version |
-| `test_cli.py` | ~25+ | CLI commands end-to-end |
+| `test_cli.py` | ~28+ | CLI commands end-to-end, set-about, set-default-prompt |
+| `test_config.py` | 15 | Config dataclasses: defaults, env var overrides, cache clearing |
+| `test_json_output.py` | 13 | --json output for 5 CLI commands |
 | `test_storage.py` | ~33 | Storage CRUD, migration, constraints, provenance, context managers, chunked IN |
 | `test_llm_connectivity.py` | ~19 | LLM retry, connectivity, error handling, get_model_name |
 | `test_paths.py` | 13 | Path construction, integration with Storage.urllist_path |

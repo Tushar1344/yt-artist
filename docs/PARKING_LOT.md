@@ -137,7 +137,7 @@ DB size:      12.4 MB
 
 ---
 
-### 9. Simplify `build-artist-prompt` `[suggestion]`
+### ~~9. Simplify `build-artist-prompt`~~ `[suggestion]` ✅ Done (Session 15)
 **Why:** The DuckDuckGo web search flow is fragile and the dependency is optional. A simpler approach: let users set the "about" text manually.
 
 **Scope:**
