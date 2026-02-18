@@ -650,3 +650,66 @@ class TestSummarizeValidation:
             code = _run_cli("summarize", "", db_path=db)
         # Empty string → "Provide video (URL or id) or --artist-id" fires first
         assert isinstance(code, str) and "Provide" in code
+
+
+# ---------------------------------------------------------------------------
+# set-about
+# ---------------------------------------------------------------------------
+
+
+class TestSetAbout:
+    def test_set_about_saves_text(self, tmp_path, capfd):
+        """Round-trip: set-about stores text, get_artist returns it."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        _seed_artist_and_video(store)
+
+        about = "A neuroscientist discussing science and wellness."
+        code = _run_cli("set-about", "--artist-id", "@TestArtist", about, db_path=db)
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "About saved" in captured.out
+        assert str(len(about)) in captured.out
+
+        # Verify the about text was persisted
+        artist = store.get_artist("@TestArtist")
+        assert artist is not None
+        assert artist["about"] == about
+
+    def test_set_about_unknown_artist(self, tmp_path):
+        """set-about with nonexistent artist exits with error."""
+        db = tmp_path / "test.db"
+        _make_store(tmp_path)
+
+        code = _run_cli("set-about", "--artist-id", "@Ghost", "Some text", db_path=db)
+        assert isinstance(code, str) and "not in DB" in code
+
+    def test_set_about_json_output(self, tmp_path):
+        """set-about --json returns valid JSON."""
+        import io
+        import json
+        import logging as _logging
+
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        _seed_artist_and_video(store)
+
+        _logging.root.handlers.clear()
+        argv = ["yt-artist", "--db", str(db), "--json", "set-about", "--artist-id", "@TestArtist", "Test about"]
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            with patch.object(sys, "argv", argv):
+                try:
+                    main()
+                    code = 0
+                except SystemExit as exc:
+                    code = exc.code if exc.code else 0
+            out = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        assert code == 0
+        data = json.loads(out)
+        assert data["artist_id"] == "@TestArtist"
+        assert data["about_len"] == len("Test about")

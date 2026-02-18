@@ -373,6 +373,15 @@ def main() -> None:
     p_set_default.add_argument("--prompt", required=True, dest="prompt_id", help="Prompt id to use as default")
     p_set_default.set_defaults(func=_cmd_set_default_prompt)
 
+    # set-about: manually set artist 'about' text (no search/LLM required)
+    p_set_about = subparsers.add_parser(
+        "set-about",
+        help="Manually set artist 'about' text (simpler alternative to build-artist-prompt)",
+    )
+    p_set_about.add_argument("--artist-id", required=True, help="Artist (channel) id, e.g. @NateBJones")
+    p_set_about.add_argument("about_text", help="About text in quotes")
+    p_set_about.set_defaults(func=_cmd_set_about)
+
     # build-artist-prompt: search artist, build 'about', optionally set as default prompt
     p_build = subparsers.add_parser(
         "build-artist-prompt",
@@ -1021,6 +1030,22 @@ def _cmd_set_default_prompt(args: argparse.Namespace, storage: Storage, data_dir
     _hint(
         f"\U0001f4a1 Next: summarize videos (will use '{prompt_id}' automatically):",
         f"   yt-artist summarize --artist-id {artist_id}",
+    )
+
+
+def _cmd_set_about(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
+    """Manually set artist 'about' text (no search/LLM required)."""
+    artist_id = (args.artist_id or "").strip()
+    if not storage.get_artist(artist_id):
+        raise SystemExit(f"Artist {artist_id} not in DB. Run fetch-channel/urllist first.")
+    about_text = args.about_text.strip()
+    storage.set_artist_about(artist_id, about_text)
+    if _json_print({"artist_id": artist_id, "about_len": len(about_text)}, args):
+        return
+    print(f"About saved for {artist_id} ({len(about_text)} chars).")
+    _hint(
+        "\U0001f4a1 Next: build a prompt from this about text:",
+        f"   yt-artist build-artist-prompt --artist-id {artist_id} --save-as-default",
     )
 
 
