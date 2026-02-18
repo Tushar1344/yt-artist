@@ -49,6 +49,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Quality scoring: heuristic + LLM self-check in scorer.py, decoupled 3rd pipeline stage
 - BAML prompts: scoring/verification only (.baml files → baml_client/ → prompts.py adapter). Summarization uses DB-stored templates rendered via _fill_template() in summarizer.py.
 - Hallucination guardrails: entity verification, faithfulness tracking, --verify claim check in scorer.py
+- IN-query batching: _execute_chunked_in() splits large WHERE IN clauses into _IN_BATCH_SIZE (500) chunks to stay under SQLite's 999 param limit
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 

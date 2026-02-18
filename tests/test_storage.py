@@ -1,8 +1,6 @@
 """Tests for storage layer: artists, videos, transcripts, prompts, summaries."""
 
 
-
-
 def test_create_and_get_artist(store):
     store.upsert_artist(
         artist_id="UC_test123",
@@ -284,3 +282,119 @@ def test_list_videos_by_artist(store):
     videos = store.list_videos(artist_id="UC_x")
     assert len(videos) == 1
     assert videos[0]["id"] == "vx"
+
+
+# ---------------------------------------------------------------------------
+# IN-query chunking tests (SQLite param limit safety)
+# ---------------------------------------------------------------------------
+from yt_artist.storage import _IN_BATCH_SIZE
+
+
+def _seed_artist_and_videos(store, n: int):
+    """Create an artist and *n* videos, returning the list of video IDs."""
+    store.upsert_artist(
+        artist_id="UC_bulk",
+        name="Bulk",
+        channel_url="https://www.youtube.com/@bulk",
+        urllist_path="data/artists/UC_bulk/artistUC_bulkBulk-urllist.md",
+    )
+    ids = [f"vid_{i:05d}" for i in range(n)]
+    for vid in ids:
+        store.upsert_video(
+            video_id=vid,
+            artist_id="UC_bulk",
+            url=f"https://youtube.com/watch?v={vid}",
+            title=vid,
+        )
+    return ids
+
+
+class TestChunkedInQueries:
+    """Verify IN-query batching for all 3 affected methods."""
+
+    # -- video_ids_with_transcripts --
+
+    def test_transcripts_empty_list(self, store):
+        assert store.video_ids_with_transcripts([]) == set()
+
+    def test_transcripts_under_limit(self, store):
+        ids = _seed_artist_and_videos(store, 50)
+        # Add transcripts for first 20
+        for vid in ids[:20]:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+        result = store.video_ids_with_transcripts(ids)
+        assert result == set(ids[:20])
+
+    def test_transcripts_over_limit(self, store):
+        """1500 IDs exceeds _IN_BATCH_SIZE — must batch correctly."""
+        n = _IN_BATCH_SIZE * 3  # 1500
+        ids = _seed_artist_and_videos(store, n)
+        # Add transcripts for every 3rd video
+        transcribed = ids[::3]
+        for vid in transcribed:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+        result = store.video_ids_with_transcripts(ids)
+        assert result == set(transcribed)
+        assert len(result) == 500
+
+    def test_transcripts_exact_boundary(self, store):
+        """Exactly _IN_BATCH_SIZE IDs — single batch, no off-by-one."""
+        ids = _seed_artist_and_videos(store, _IN_BATCH_SIZE)
+        for vid in ids[:10]:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+        result = store.video_ids_with_transcripts(ids)
+        assert result == set(ids[:10])
+
+    # -- video_ids_with_summary --
+
+    def test_summaries_over_limit(self, store):
+        n = _IN_BATCH_SIZE * 3
+        ids = _seed_artist_and_videos(store, n)
+        store.upsert_prompt(prompt_id="p1", name="p1", template="test")
+        # Add transcripts + summaries for every 5th video
+        summarized = ids[::5]
+        for vid in summarized:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+            store.upsert_summary(video_id=vid, prompt_id="p1", content=f"summary {vid}")
+        result = store.video_ids_with_summary(ids, "p1")
+        assert result == set(summarized)
+        assert len(result) == 300
+
+    def test_summaries_empty_list(self, store):
+        assert store.video_ids_with_summary([], "p1") == set()
+
+    # -- get_unscored_summaries --
+
+    def test_unscored_over_limit(self, store):
+        n = _IN_BATCH_SIZE * 2 + 100  # 1100
+        ids = _seed_artist_and_videos(store, n)
+        store.upsert_prompt(prompt_id="p2", name="p2", template="test")
+        # Add transcripts + summaries for first 600
+        for vid in ids[:600]:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+            store.upsert_summary(video_id=vid, prompt_id="p2", content=f"summary {vid}")
+        result = store.get_unscored_summaries("p2", ids)
+        assert len(result) == 600
+        returned_ids = {r["video_id"] for r in result}
+        assert returned_ids == set(ids[:600])
+
+    def test_unscored_without_video_ids(self, store):
+        """No video_ids filter — should return all unscored for prompt."""
+        store.upsert_artist(
+            artist_id="UC_unscore",
+            name="Unscore",
+            channel_url="https://www.youtube.com/@unscore",
+            urllist_path="data/artists/UC_unscore/artistUC_unscoreUnscore-urllist.md",
+        )
+        store.upsert_video(
+            video_id="vu1",
+            artist_id="UC_unscore",
+            url="https://youtube.com/watch?v=vu1",
+            title="VU1",
+        )
+        store.save_transcript(video_id="vu1", raw_text="text")
+        store.upsert_prompt(prompt_id="p3", name="p3", template="t")
+        store.upsert_summary(video_id="vu1", prompt_id="p3", content="s")
+        result = store.get_unscored_summaries("p3")
+        assert len(result) == 1
+        assert result[0]["video_id"] == "vu1"

@@ -12,6 +12,12 @@ from yt_artist.init_db import get_schema_sql
 
 log = logging.getLogger("yt_artist.storage")
 
+# SQLite has a compile-time limit (SQLITE_MAX_VARIABLE_NUMBER, default 999) on
+# the number of ?-placeholders per query.  Channels with 1000+ videos would
+# exceed this in WHERE ... IN (?, ?, ...) clauses.  We batch at 500 to stay
+# well under the limit.
+_IN_BATCH_SIZE = 500
+
 # ---------------------------------------------------------------------------
 # TypedDict row types — give callers type-safe access to dict keys.
 # Using total=False only where columns may be absent on older DBs.
@@ -521,18 +527,41 @@ class Storage:
         finally:
             conn.close()
 
+    @staticmethod
+    def _execute_chunked_in(
+        conn: sqlite3.Connection,
+        query_template: str,
+        id_list: List[str],
+        extra_params: Optional[List] = None,
+    ) -> List:
+        """Execute a query with IN clause in batches to stay under SQLite param limit.
+
+        *query_template* must contain ``{placeholders}`` where the IN list goes.
+        *extra_params* are prepended to each batch's parameter list (e.g. prompt_id).
+        Returns all rows from all batches concatenated.
+        """
+        results: List = []
+        prefix = extra_params or []
+        for i in range(0, len(id_list), _IN_BATCH_SIZE):
+            batch = id_list[i : i + _IN_BATCH_SIZE]
+            placeholders = ",".join("?" for _ in batch)
+            sql = query_template.format(placeholders=placeholders)
+            cur = conn.execute(sql, prefix + batch)
+            results.extend(cur.fetchall())
+        return results
+
     def video_ids_with_transcripts(self, video_ids: List[str]) -> set:
-        """Return the subset of video_ids that already have transcripts (single query)."""
+        """Return the subset of video_ids that already have transcripts."""
         if not video_ids:
             return set()
         conn = self._conn()
         try:
-            placeholders = ",".join("?" for _ in video_ids)
-            cur = conn.execute(
-                f"SELECT video_id FROM transcripts WHERE video_id IN ({placeholders})",
+            rows = self._execute_chunked_in(
+                conn,
+                "SELECT video_id FROM transcripts WHERE video_id IN ({placeholders})",
                 video_ids,
             )
-            return {row["video_id"] if isinstance(row, dict) else row[0] for row in cur.fetchall()}
+            return {row["video_id"] if isinstance(row, dict) else row[0] for row in rows}
         finally:
             conn.close()
 
@@ -542,12 +571,13 @@ class Storage:
             return set()
         conn = self._conn()
         try:
-            placeholders = ",".join("?" for _ in video_ids)
-            cur = conn.execute(
-                f"SELECT video_id FROM summaries WHERE prompt_id = ? AND video_id IN ({placeholders})",
-                [prompt_id] + video_ids,
+            rows = self._execute_chunked_in(
+                conn,
+                "SELECT video_id FROM summaries WHERE prompt_id = ? AND video_id IN ({placeholders})",
+                video_ids,
+                extra_params=[prompt_id],
             )
-            return {row["video_id"] if isinstance(row, dict) else row[0] for row in cur.fetchall()}
+            return {row["video_id"] if isinstance(row, dict) else row[0] for row in rows}
         finally:
             conn.close()
 
@@ -594,18 +624,19 @@ class Storage:
         conn = self._conn()
         try:
             if video_ids:
-                placeholders = ",".join("?" for _ in video_ids)
-                cur = conn.execute(
-                    f"SELECT video_id, prompt_id FROM summaries "
-                    f"WHERE prompt_id = ? AND quality_score IS NULL AND video_id IN ({placeholders})",
-                    [prompt_id] + video_ids,
+                return self._execute_chunked_in(
+                    conn,
+                    "SELECT video_id, prompt_id FROM summaries "
+                    "WHERE prompt_id = ? AND quality_score IS NULL AND video_id IN ({placeholders})",
+                    video_ids,
+                    extra_params=[prompt_id],
                 )
             else:
                 cur = conn.execute(
                     "SELECT video_id, prompt_id FROM summaries WHERE prompt_id = ? AND quality_score IS NULL",
                     (prompt_id,),
                 )
-            return cur.fetchall()
+                return cur.fetchall()
         finally:
             conn.close()
 
