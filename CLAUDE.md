@@ -42,8 +42,8 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - CLI: argparse subcommands, each command is _cmd_* function taking (args, storage, data_dir)
 - Upsert pattern everywhere: INSERT ON CONFLICT DO UPDATE
 - Background jobs: re-exec as subprocess with --_bg-worker flag
-- Concurrency via ThreadPoolExecutor, capped at MAX_CONCURRENCY=3 (bulk transcribe/summarize/score)
-- Parallel map-reduce: chunk summaries run concurrently in map phase (_MAP_CONCURRENCY workers)
+- Concurrency via ThreadPoolExecutor, capped at ConcurrencyConfig.max_concurrency=3 (bulk transcribe/summarize/score)
+- Parallel map-reduce: chunk summaries run concurrently in map phase (ConcurrencyConfig.map_concurrency workers)
 - Pipeline parallelism: producer-consumer with DB-polling in pipeline.py (ADR-0012)
 - Long-transcript strategies: auto/truncate/map-reduce/refine in summarizer.py (ADR-0013)
 - Quality scoring: heuristic + LLM self-check in scorer.py, decoupled 3rd pipeline stage

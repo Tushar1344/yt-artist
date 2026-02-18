@@ -8,12 +8,10 @@ import shutil
 import sys
 from typing import List, Tuple
 
-from yt_artist.config import get_youtube_config
+from yt_artist.config import get_concurrency_config, get_youtube_config
 
-# Maximum concurrency for bulk yt-dlp operations.  Kept conservative to avoid
-# triggering YouTube's adaptive rate-limiter.  Users can override via
-# --concurrency but the CLI clamps to this ceiling.
-MAX_CONCURRENCY = 3
+# Backward-compat re-export; authoritative value lives in config.ConcurrencyConfig.
+MAX_CONCURRENCY: int = get_concurrency_config().max_concurrency
 
 # Default inter-video delay in seconds (between consecutive yt-dlp calls in
 # bulk operations).  Overridable via YT_ARTIST_INTER_VIDEO_DELAY env var.

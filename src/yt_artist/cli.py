@@ -18,13 +18,13 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from yt_artist import __version__
 from yt_artist.artist_prompt import build_artist_about
+from yt_artist.config import get_concurrency_config
 from yt_artist.fetcher import ensure_artist_and_video_for_video_url, fetch_channel
 from yt_artist.llm import check_connectivity as _check_llm
 from yt_artist.storage import Storage
 from yt_artist.summarizer import summarize
 from yt_artist.transcriber import extract_video_id, transcribe
 from yt_artist.yt_dlp_util import (
-    MAX_CONCURRENCY,
     channel_url_for,
     get_auth_config,
     get_inter_video_delay,
@@ -244,9 +244,9 @@ def main() -> None:
         default=1,
         metavar="N",
         help=(
-            f"Number of parallel workers for bulk transcribe/summarize "
-            f"(default: 1, max: {MAX_CONCURRENCY}). Higher values increase "
-            f"YouTube rate-limit risk."
+            "Number of parallel workers for bulk transcribe/summarize "
+            f"(default: 1, max: {get_concurrency_config().max_concurrency}). Higher values increase "
+            "YouTube rate-limit risk."
         ),
     )
     parser.add_argument(
@@ -435,8 +435,9 @@ def main() -> None:
     global _quiet  # noqa: PLW0603
     _quiet = getattr(args, "quiet", False)
 
-    # Clamp concurrency to [1, MAX_CONCURRENCY] to prevent YouTube rate-limit issues.
-    args.concurrency = max(1, min(getattr(args, "concurrency", 1) or 1, MAX_CONCURRENCY))
+    # Clamp concurrency to [1, max_concurrency] to prevent YouTube rate-limit issues.
+    _max_c = get_concurrency_config().max_concurrency
+    args.concurrency = max(1, min(getattr(args, "concurrency", 1) or 1, _max_c))
 
     data_dir = args.data_dir or _default_data_dir()
     db_path = args.db or _default_db_path(data_dir)

@@ -38,18 +38,12 @@ class PipelineResult:
 def _split_concurrency(total: int) -> Tuple[int, int]:
     """Split concurrency budget between transcribe and summarize workers.
 
-    Returns (transcribe_workers, summarize_workers).
-
-    Transcribe gets more workers because YouTube I/O is the slower bottleneck.
-    Summarize is faster per-video and not rate-limited by the LLM.
-
-    concurrency=1 → (1, 1): overlap is the whole point; YouTube pressure stays at 1.
-    concurrency=2 → (1, 1): same split.
-    concurrency=3 → (2, 1): extra worker goes to transcribe.
+    Delegates to ConcurrencyConfig.split_budget() — kept here as a thin
+    wrapper so callers importing from pipeline still work.
     """
-    if total <= 2:
-        return (1, 1)
-    return (total - 1, 1)
+    from yt_artist.config import get_concurrency_config
+
+    return get_concurrency_config().split_budget(total)
 
 
 def run_pipeline(
