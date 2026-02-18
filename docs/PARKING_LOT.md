@@ -177,6 +177,8 @@ DB size:      12.4 MB
 ### 23. cli.py structural refactor: AppContext + _cmd_summarize decomposition `[suggestion]`
 **Why:** cli.py is ~1,600 lines with 14 `_cmd_*` functions. Manageable now but `_cmd_summarize` alone is 297 lines mixing 4 concerns (single-video, bulk-sequential, pipeline, scoring setup). Three module-level globals (`_quiet`, `_bg_job_id`, `_bg_storage`) couple helpers to implicit state.
 
+**Note:** Config centralization (config.py) is done (Session 15), but `transcriber.py` line 323 still reads `os.environ.get("YT_ARTIST_PO_TOKEN")` directly — should delegate to `get_youtube_config().po_token`. Fix as part of AppContext work or standalone cleanup.
+
 **Recommended approach (2 steps):**
 1. **AppContext dataclass** — replace the 3 globals + `(args, storage, data_dir)` triple with a single context object. Prerequisite for any further splitting. Improves testability immediately.
 2. **Break up `_cmd_summarize`** — extract `_summarize_single()`, `_summarize_bulk_sequential()`, `_summarize_pipeline()` as private helpers. Same file, just cleaner.
@@ -186,6 +188,62 @@ DB size:      12.4 MB
 - `use_cases/` layer — domain logic already lives in fetcher/transcriber/summarizer/scorer/pipeline. Adding a third layer between cli and domain has little benefit today.
 
 **Effort:** Medium. AppContext is mechanical but touches all 14 commands + helpers. _cmd_summarize decomposition is contained. Test disruption is moderate (many tests patch sys.argv + call main()).
+
+---
+
+### 24. Per-video work ledger table `[architecture review]`
+**Why:** No history of *what* was done to each video and *when*. If a summarization fails, was retried, or produced different results with a different model, there's no audit trail. The current schema only stores the latest state (transcript exists or not, summary exists or not).
+
+**Scope:**
+- New `work_ledger` table: `(id, video_id, operation, model, prompt_id, started_at, finished_at, status, error_message)`
+- Operations: `transcribe`, `summarize`, `score`, `verify`
+- Enables: retry-with-backoff intelligence, cost tracking per operation, "what changed" debugging
+- CLI: `yt-artist history --video-id X` → show all operations for a video
+
+**Effort:** Medium. Schema + storage methods + CLI command + backfill question (populate from existing data?).
+
+---
+
+### 25. Stop external `storage._conn()` calls `[architecture review]`
+**Why:** `_conn()` is a private method but `jobs.py` (8 calls) and `rate_limit.py` (2 calls) use it directly, bypassing context managers (`_read_conn()`, `_write_conn()`, `transaction()`). Tests have 26 direct calls. This couples callers to connection lifecycle details and makes it harder to add connection pooling or tracing later.
+
+**Current state (partial):** Context managers exist and most storage.py methods use them internally. The problem is external callers.
+
+**Scope:**
+- `jobs.py`: expose proper public methods on Storage (or a JobsStore helper) for each operation
+- `rate_limit.py`: expose `log_request()` and `get_request_counts()` on Storage
+- Tests: migrate from `store._conn()` to public methods or use `transaction()` context manager
+- Consider: make `_conn()` raise DeprecationWarning when called from outside storage.py
+
+**Effort:** Medium. Mechanical but touches many files. Jobs.py is the bulk of the work.
+
+---
+
+### 26. FTS5 full-text transcript search `[architecture review]`
+**Why:** `search-transcripts` currently does exact video_id/artist_id filtering only. There's no way to search *within* transcript text (e.g., "find all videos where the speaker mentions dopamine"). This is a significant UX gap for users with large transcript libraries.
+
+**Scope:**
+- FTS5 virtual table: `CREATE VIRTUAL TABLE transcripts_fts USING fts5(raw_text, content=transcripts, content_rowid=rowid)`
+- Triggers to keep FTS index in sync on INSERT/UPDATE/DELETE
+- `search-transcripts --query "dopamine"` → ranked results with snippet context
+- Migration: rebuild FTS index from existing transcripts on schema upgrade
+- `--json` support for search results
+
+**Effort:** Medium. FTS5 is well-documented SQLite feature. Main work: migration, index sync triggers, snippet extraction, CLI surface.
+
+---
+
+### 27. Persist model/prompt/transcript hashes `[architecture review]`
+**Why:** Currently summaries store `model` as a plain string but no hash of the prompt template or transcript content. There's no way to detect "this summary is stale because the prompt changed" or "we should re-summarize because the transcript was updated." Re-summarization today is all-or-nothing.
+
+**Scope:**
+- New columns on `summaries` table: `prompt_hash TEXT`, `transcript_hash TEXT`
+- Hash: SHA-256 of prompt template text and transcript content at summarization time
+- `summarize --force` could check hashes: "3 summaries are stale (prompt changed), 2 stale (transcript updated)"
+- `status` command: show stale summary count
+- Migration: existing summaries get NULL hashes (unknown provenance)
+
+**Effort:** Medium. Schema change + hash computation at summarize time + staleness detection logic.
 
 ---
 
