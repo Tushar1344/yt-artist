@@ -16,9 +16,9 @@ graph TD
     end
 
     subgraph BAML Prompt Layer
-        PROMPTS["prompts.py<br/>BAML adapter (6 functions)"]
+        PROMPTS["prompts.py<br/>BAML adapter (scoring only)"]
         BAMLCLIENT["baml_client/<br/>(auto-generated)"]
-        BAMLSRC["baml_src/*.baml<br/>(git-versioned)"]
+        BAMLSRC["baml_src/score.baml<br/>(git-versioned)"]
     end
 
     subgraph Data Layer
@@ -41,7 +41,6 @@ graph TD
     CLI --> JOBS
     CLI --> YTDLP
 
-    SUMM --> PROMPTS
     SCORE --> PROMPTS
     PROMPTS --> BAMLCLIENT
     BAMLSRC -- "baml-cli generate" --> BAMLCLIENT
@@ -108,7 +107,7 @@ graph TD
   |     - refine: iterative rolling summary          |
   |  3. Load prompt template                         |
   |  4. Fill {artist},{video},{intent},{audience}     |
-  |  5. BAML prompt via prompts.py (cached client)   |
+  |  5. DB template via _fill_template() + llm.complete()  |
   |  6. Upsert to summaries table                    |
   |  7. Update ProgressCounter (+ jobs DB if --bg)   |
   +--------------------------------------------------+
@@ -671,22 +670,15 @@ Client cache invalidated when env vars change between calls. Retry with exponent
   Defaults are conservative: safe for 500+ video channels.
 ```
 
-## 15. BAML Prompt Architecture
+## 15. Prompt Architecture
 
 ```
-  Source of Truth (git-versioned):
+  Scoring prompts (BAML, git-versioned):
 
   baml_src/
        |
        +-- clients.baml         Ollama + OpenAI client configs
        |                        Exponential retry policy
-       |
-       +-- summarize.baml       4 prompt functions:
-       |     +-- SummarizeSinglePass(transcript, artist, video_title) -> string
-       |     +-- SummarizeChunk(chunk, chunk_index, total_chunks) -> string
-       |     +-- ReduceChunkSummaries(section_summaries) -> string
-       |     +-- RefineSummary(prev_summary, chunk, chunk_index, total_chunks) -> string
-       |     +-- All include anti-hallucination: "Do not invent names/facts"
        |
        +-- score.baml           2 prompt functions with typed outputs:
        |     +-- ScoreSummary(transcript_excerpt, summary) -> ScoreRating
@@ -702,19 +694,31 @@ Client cache invalidated when env vars change between calls. Retry with exponent
        |                        2. Run baml-cli generate
        v                        3. baml_client/ regenerated
   baml_client/                  4. prompts.py picks up changes
-  (auto-generated,              5. No Python source editing needed
-   .gitignored)                    for prompt-only changes
+  (auto-generated,
+   .gitignored)
        |
        v
-  prompts.py (thin adapter)     Codebase-facing API:
+  prompts.py (thin adapter)     Codebase-facing API (scoring only):
        |
-       +-- summarize_single_pass()    --> summarizer.py
-       +-- summarize_chunk()          --> summarizer.py
-       +-- reduce_chunk_summaries()   --> summarizer.py
-       +-- refine_summary()           --> summarizer.py
        +-- score_summary()            --> scorer.py
        +-- verify_claims()            --> scorer.py
        +-- Re-exports: ScoreRating, ClaimVerification types
+
+  Summarization prompts (DB-stored, user-customizable):
+
+  DB prompts table              User manages via: yt-artist add-prompt
+       |
+       v
+  _fill_template()              Renders {artist}, {video}, {intent}, {audience}
+       |
+       v
+  summarizer.py                 Calls llm.complete(system_prompt=..., user_content=...)
+       |
+       +-- Single-pass: rendered DB template as system prompt
+       +-- Map-reduce: internal _CHUNK_SYSTEM_PROMPT for chunks,
+       |               DB template + _REDUCE_SUFFIX for final reduce
+       +-- Refine: DB template for first chunk,
+                   internal _REFINE_SYSTEM_PROMPT for subsequent
 ```
 
 ## 16. Hallucination Guardrails Stack
@@ -726,10 +730,12 @@ Client cache invalidated when env vars change between calls. Retry with exponent
   +=========================================================================+
   | TIER 1: Prompt Hardening (always on, 0 extra LLM calls)                |
   |-------------------------------------------------------------------------|
-  | Every .baml prompt includes:                                            |
+  | All prompts include anti-hallucination instructions:                    |
   |   "Only state facts, names, quotes that appear in the transcript."      |
   |   "Do not invent or assume any information."                            |
-  | Single source of truth: baml_src/*.baml (git diff shows changes)        |
+  | Sources: DB default template (storage.py), internal constants           |
+  |   (_CHUNK_SYSTEM_PROMPT, _REDUCE_SUFFIX, _REFINE_SYSTEM_PROMPT in      |
+  |   summarizer.py), and score.baml for scoring prompts.                   |
   +=========================================================================+
        |
        v

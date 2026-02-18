@@ -36,27 +36,36 @@ class TestScoringAdapters:
 
 
 # ---------------------------------------------------------------------------
-# Prompt content assertions: verify faithfulness instructions in .baml files
+# Prompt content assertions: verify faithfulness instructions
 # ---------------------------------------------------------------------------
 
 _BAML_SRC = os.path.join(os.path.dirname(__file__), "..", "baml_src")
 
 
 class TestPromptFaithfulness:
-    """Assert that BAML prompt files contain anti-hallucination instructions."""
+    """Assert that prompt sources contain anti-hallucination instructions."""
 
     def _read_baml(self, filename: str) -> str:
         path = os.path.join(_BAML_SRC, filename)
         with open(path) as f:
             return f.read()
 
-    def test_summarize_baml_has_faithfulness(self):
-        """Summarize prompts (chunk/reduce/refine) must include 'do not invent' instruction."""
-        content = self._read_baml("summarize.baml")
-        assert content.count("Do not invent") >= 3, "summarize.baml must have 'Do not invent' in chunk/reduce/refine"
-        assert "Only state facts" in content or "Only include" in content, (
-            "summarize.baml must have factual-only instruction"
-        )
+    def test_summarizer_prompts_have_faithfulness(self):
+        """Internal chunk/reduce/refine prompts must include 'Do not invent' instruction."""
+        from yt_artist.summarizer import _CHUNK_SYSTEM_PROMPT, _REDUCE_SUFFIX, _REFINE_SYSTEM_PROMPT
+
+        assert "Do not invent" in _CHUNK_SYSTEM_PROMPT
+        assert "Only include" in _CHUNK_SYSTEM_PROMPT
+        assert "Do not add" in _REDUCE_SUFFIX or "not found in" in _REDUCE_SUFFIX
+        assert "Do not invent" in _REFINE_SYSTEM_PROMPT
+
+    def test_default_template_has_faithfulness(self):
+        """Default DB prompt template must include anti-hallucination instruction."""
+        from yt_artist.storage import Storage
+
+        template = Storage._DEFAULT_PROMPT_TEMPLATE
+        assert "do not invent" in template.lower()
+        assert "Only state facts" in template or "Only include" in template
 
     def test_score_baml_has_faithfulness_criterion(self):
         """ScoreSummary prompt must evaluate faithfulness as a criterion."""

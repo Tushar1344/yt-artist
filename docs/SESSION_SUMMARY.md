@@ -335,24 +335,23 @@ ALTER TABLE summaries ADD COLUMN llm_score REAL;
 
 ---
 
-## Sessions 11-13: BAML Prompt Management + Hallucination Guardrails (405 tests)
+## Sessions 11-13: BAML Scoring + DB Templates + Hallucination Guardrails (405 tests)
 
-**Goal:** Versioned typed prompt functions via BAML; 3-tier hallucination guardrails.
+**Goal:** BAML for typed scoring prompts; DB-stored templates for summarization; 3-tier hallucination guardrails.
 
 ### New files
 
 | File | Purpose |
 |------|---------|
 | `baml_src/clients.baml` | Ollama + OpenAI client configs with exponential retry |
-| `baml_src/summarize.baml` | 4 typed prompt functions: SummarizeSinglePass, SummarizeChunk, ReduceChunkSummaries, RefineSummary |
 | `baml_src/score.baml` | ScoreSummary → ScoreRating, VerifyClaims → ClaimVerification[] |
 | `baml_src/generators.baml` | Python/Pydantic code generation config |
-| `src/yt_artist/prompts.py` | Thin adapter: 6 functions wrapping baml_client.b, re-exports types |
+| `src/yt_artist/prompts.py` | Thin adapter: 2 scoring functions wrapping baml_client.b, re-exports types |
 
 ### New test module: `test_prompts.py` (11 tests)
 
 - BAML adapter function tests with mocked `baml_client.b`
-- Anti-hallucination content assertions on `.baml` source files
+- Anti-hallucination content assertions on summarizer prompts and score.baml
 
 ### Changes to `scorer.py` (~380 lines total, up from ~220)
 
@@ -370,8 +369,9 @@ ALTER TABLE summaries ADD COLUMN llm_score REAL;
 
 ### Changes to `summarizer.py`
 
-- Removed 4 hardcoded prompt constants (`_MAP_PROMPT`, `_REDUCE_PROMPT_PREFIX`, `_REFINE_PROMPT`, inline system prompt)
-- All LLM calls now go through `prompts.*` functions
+- Removed 4 hardcoded prompt constants, replaced with DB-stored templates rendered via `_fill_template()` + `llm.complete()`
+- Internal chunk/reduce/refine prompts are module-level constants (`_CHUNK_SYSTEM_PROMPT`, `_REDUCE_SUFFIX`, `_REFINE_SYSTEM_PROMPT`)
+- User's custom template controls single-pass + final reduce; chunk/refine use internal prompts
 
 ### Schema changes
 
@@ -396,13 +396,13 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 ### Test updates
 
 - `test_scorer.py`: 53 tests (up from 35) — entity score, sampling, faithfulness, verification, DB integration
-- `test_chunked_summarize.py`, `test_summarizer.py`: updated mocks for prompts module
+- `test_chunked_summarize.py`, `test_summarizer.py`: mocks target `llm_complete` (not prompts module)
 - `test_r8_empty_summary.py`, `test_ux_improvements.py`: minor mock path updates
 
 ### Documentation
 
-- ADR-0014: BAML prompt management and hallucination guardrails
-- Architecture diagrams updated with 2 new diagrams (#15 BAML, #16 Guardrails)
+- ADR-0014: BAML scoring and hallucination guardrails
+- Architecture diagrams updated with 2 new diagrams (#15 Prompt Architecture, #16 Guardrails)
 
 ---
 
@@ -464,7 +464,7 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `llm.py` | 182 | OpenAI/Ollama client with caching and retry |
 | `mcp_server.py` | 110 | MCP server for IDE integration |
 | `rate_limit.py` | 85 | YouTube rate-limit tracking and warnings |
-| `prompts.py` | 75 | BAML adapter: 6 typed prompt functions |
+| `prompts.py` | 48 | BAML adapter: 2 scoring functions (score_summary, verify_claims) |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
@@ -488,7 +488,7 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `test_storage.py` | ~20 | Storage CRUD, migration, constraints |
 | `test_llm_connectivity.py` | ~15+ | LLM retry, connectivity, error handling |
 | `test_yt_dlp_util.py` | 18 | Rate-limit config, cookies, delays, PO token, auth |
-| `test_prompts.py` | 11 | BAML adapter functions, anti-hallucination content checks |
+| `test_prompts.py` | 11 | BAML scoring adapter, anti-hallucination content checks (summarizer + score.baml) |
 | Others | ~30+ | Fetcher, transcriber, summarizer, edge cases |
 
 ### Architecture decisions (14 ADRs)

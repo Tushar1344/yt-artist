@@ -14,32 +14,37 @@ Two problems driving this change:
 
 ## Decision
 
-### BAML for prompt management
+### BAML for scoring/verification prompts
 
-Migrate all LLM prompts to [BAML](https://github.com/BoundaryML/baml) — typed prompt functions in `.baml` files, git-versioned, Ollama-compatible, with structured input/output types.
+Migrate scoring and verification prompts to [BAML](https://github.com/BoundaryML/baml) — typed prompt functions in `.baml` files, git-versioned, Ollama-compatible, with structured input/output types.
 
 **Architecture:**
 
 ```
-baml_src/*.baml          → Prompt definitions (source of truth)
+baml_src/*.baml          → Scoring prompt definitions (source of truth)
     ↓ baml-cli generate
 baml_client/             → Auto-generated typed Python (gitignored)
     ↓
-src/yt_artist/prompts.py → Thin adapter (6 functions wrapping baml_client.b)
+src/yt_artist/prompts.py → Thin adapter (2 functions wrapping baml_client.b)
     ↓
-summarizer.py, scorer.py → Call prompts.* instead of llm.complete()
+scorer.py                → Calls prompts.score_summary(), prompts.verify_claims()
+
+Summarization prompts:
+DB prompts table         → User-customizable templates (source of truth)
+    ↓ _fill_template()
+summarizer.py            → Renders template, calls llm.complete() directly
 ```
 
 **Files:**
 - `baml_src/clients.baml` — Ollama + OpenAI client configs
-- `baml_src/summarize.baml` — 4 functions: SummarizeSinglePass, SummarizeChunk, ReduceChunkSummaries, RefineSummary
 - `baml_src/score.baml` — 2 functions: ScoreSummary (→ typed ScoreRating), VerifyClaims (→ ClaimVerification[])
-- `src/yt_artist/prompts.py` — Adapter bridging BAML → codebase
+- `baml_src/generators.baml` — Python/Pydantic code generation config
+- `src/yt_artist/prompts.py` — Adapter bridging BAML → codebase (scoring only)
 
 ### Hallucination guardrails (3 tiers)
 
 **Tier 1 — Prompt hardening (0 extra LLM calls):**
-Every BAML prompt includes "Do not invent" / "Only state facts" / "Only include information explicitly stated" instructions. Checked by `tests/test_prompts.py` which reads `.baml` files and asserts anti-hallucination language.
+All summarization prompts (DB default template + internal chunk/reduce/refine constants in `summarizer.py`) and scoring prompts (`score.baml`) include "Do not invent" / "Only state facts" / "Only include information explicitly stated" instructions. Checked by `tests/test_prompts.py` which asserts anti-hallucination language in both sources.
 
 **Tier 2 — Improved scoring (0 extra LLM calls):**
 - `_named_entity_score()`: Regex-extract proper nouns from summary, check each against transcript. "Elijah Wood" not in transcript → score ≈ 0.0.
@@ -76,6 +81,8 @@ Every BAML prompt includes "Do not invent" / "Only state facts" / "Only include 
 - `baml_client/` is auto-generated (gitignored), must regenerate after `.baml` changes
 
 **Migration:**
-- `llm.complete()` still exists for `artist_prompt.py` but no longer used by summarizer/scorer
+- `llm.complete()` used by `summarizer.py` (DB template → system prompt) and `artist_prompt.py`
+- BAML used by `scorer.py` only (via `prompts.py` adapter)
+- Summarization prompts: DB-stored templates rendered via `_fill_template()` in `summarizer.py`; internal chunk/reduce/refine prompts are module-level constants (not user-customizable)
 - Existing `quality_score`/`heuristic_score`/`llm_score` columns unchanged
 - New columns (`faithfulness_score`, `verification_score`) added via schema migration, default NULL

@@ -209,28 +209,28 @@ Decoupled from summarization — scoring is a separate pipeline stage.
 
 ---
 
-## Sessions 11-12: BAML Prompt Management
+## Sessions 11-12: BAML Scoring + DB-Stored Summarization Templates
 
-**Focus:** Versioned, typed prompt functions and eliminating hardcoded prompt strings.
+**Focus:** Typed scoring prompts via BAML and DB-stored summarization templates.
 
 **The problem:**
-All LLM prompts were hardcoded as Python string constants scattered across `summarizer.py` and `scorer.py`. Changing a prompt required editing Python source. No version history on prompt wording. No structured inputs/outputs — just raw string interpolation and manual parsing.
+All LLM prompts were hardcoded as Python string constants scattered across `summarizer.py` and `scorer.py`. Changing a prompt required editing Python source. No version history on prompt wording. No structured inputs/outputs — just raw string interpolation and manual parsing. The DB `prompts` table existed but templates were never actually sent to the LLM.
 
 **What we built:**
 
-### BAML integration
-- Adopted [BAML](https://github.com/BoundaryML/baml) (Boundary AI Markup Language) for typed prompt functions.
-- 4 `.baml` files in `baml_src/`: prompt definitions with explicit input/output types, Ollama + OpenAI client configs, code generation settings.
-- `baml-cli generate` produces `baml_client/` (auto-generated, gitignored). Prompt changes are git diffs of `.baml` files — no Python editing needed.
-- Thin `prompts.py` adapter: 6 functions wrapping BAML-generated code so the rest of the codebase never imports `baml_client` directly.
+### BAML for scoring (typed outputs)
+- Adopted [BAML](https://github.com/BoundaryML/baml) for scoring/verification prompts where typed outputs matter.
+- `score.baml`: ScoreSummary → typed ScoreRating (completeness, coherence, faithfulness as integers), VerifyClaims → ClaimVerification[] (claim text + verified bool). No manual parsing.
+- Thin `prompts.py` adapter: 2 functions wrapping BAML-generated code so `scorer.py` never imports `baml_client` directly.
 
-### Prompt refactoring
-- `summarizer.py`: removed 4 hardcoded prompt constants, replaced with `prompts.summarize_single_pass()`, `prompts.summarize_chunk()`, `prompts.reduce_chunk_summaries()`, `prompts.refine_summary()`.
-- `scorer.py`: replaced `_LLM_SCORE_PROMPT` + `_parse_llm_rating()` with `prompts.score_summary()` returning typed `ScoreRating` (completeness, coherence, faithfulness as integers). No manual parsing.
+### DB templates for summarization (user-customizable)
+- `summarizer.py`: DB-stored prompt templates are the actual system prompt sent to the LLM via `_fill_template()` + `llm.complete()`. Users customize via `yt-artist add-prompt`.
+- Internal chunk/reduce/refine prompts are module-level constants (not user-customizable) — they're mechanical, not creative.
+- `scorer.py`: replaced `_LLM_SCORE_PROMPT` + `_parse_llm_rating()` with `prompts.score_summary()` returning typed `ScoreRating`.
 
-**Result:** 382 tests passing. Prompts are now versioned files with git history, typed inputs/outputs, and zero manual string parsing.
+**Result:** 382 tests passing. Scoring prompts have typed outputs via BAML. Summarization prompts are user-customizable via DB templates.
 
-**Design principle:** Adapter pattern isolates the codebase from BAML internals. If BAML is ever replaced, only `prompts.py` changes.
+**Design principle:** BAML where typed outputs matter (scoring). DB templates where user customization matters (summarization). Adapter pattern isolates the codebase from BAML internals.
 
 ---
 
@@ -244,7 +244,7 @@ The Huberman Lab willpower episode (`cwakOgHIT0E`, 132K chars) produced a summar
 **What we built:**
 
 ### Tier 1: Prompt hardening (0 extra LLM calls)
-Every `.baml` prompt now includes explicit anti-hallucination instructions: "Only state facts, names, quotes that appear in the transcript. Do not invent or assume any information."
+All prompts now include explicit anti-hallucination instructions: "Only state facts, names, quotes that appear in the transcript. Do not invent or assume any information." This applies to the DB default template, internal chunk/reduce/refine constants in `summarizer.py`, and `score.baml`.
 
 ### Tier 2: Scoring guardrails (0 extra LLM calls)
 - **Named entity verification** (`_named_entity_score()`): Regex-extracts proper nouns from summaries (multi-word names like "Elijah Wood", single mid-sentence capitalized words). Filters stopwords (months, days, sentence-start words). Checks each entity against the transcript. Score = verified/total, weight = 0.20 of heuristic score. The Elijah Wood hallucination now scores ~0.0 on this metric.
@@ -283,7 +283,7 @@ Every `.baml` prompt now includes explicit anti-hallucination instructions: "Onl
 
 | Metric | Value |
 |--------|-------|
-| Source files | 16 Python modules + 4 BAML prompt files |
+| Source files | 16 Python modules + 3 BAML files (scoring only) |
 | Source lines | ~6,000 |
 | Test files | 28 test modules |
 | Total tests | 414 |
