@@ -283,14 +283,14 @@ All prompts now include explicit anti-hallucination instructions: "Only state fa
 
 | Metric | Value |
 |--------|-------|
-| Source files | 16 Python modules + 3 BAML files (scoring only) |
-| Source lines | ~6,000 |
-| Test files | 28 test modules |
-| Total tests | 414 |
+| Source files | 17 Python modules + 3 BAML files (scoring only) |
+| Source lines | ~6,100 |
+| Test files | 29 test modules |
+| Total tests | 450 |
 | ADRs | 14 (0001-0014) |
-| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py` |
+| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py`, `paths.py` |
 | Sessions | 14 |
-| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 → 450 |
 
 ---
 

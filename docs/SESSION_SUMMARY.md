@@ -448,12 +448,12 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 
 ## Final Project State
 
-### Source code (~6,000 lines across 16 modules)
+### Source code (~6,100 lines across 17 modules)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
 | `cli.py` | ~1,500 | CLI entry point, all commands, argparse, progress counter |
-| `storage.py` | ~700 | SQLite ORM, migrations, all CRUD operations |
+| `storage.py` | ~720 | SQLite ORM, migrations, all CRUD operations |
 | `jobs.py` | 424 | Background job management |
 | `transcriber.py` | 404 | Video transcription via yt-dlp subtitles |
 | `scorer.py` | ~380 | Quality scoring: heuristic + LLM self-check + entity verify + claim verify |
@@ -461,15 +461,16 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `fetcher.py` | 254 | Channel URL fetching, artist/video resolution |
 | `yt_dlp_util.py` | 256 | yt-dlp configuration, URL validation, auth helpers |
 | `pipeline.py` | ~240 | 3-stage producer-consumer pipeline |
-| `llm.py` | 182 | OpenAI/Ollama client with caching and retry |
+| `llm.py` | ~190 | OpenAI/Ollama client with caching, retry, model resolution |
 | `mcp_server.py` | 110 | MCP server for IDE integration |
 | `rate_limit.py` | 85 | YouTube rate-limit tracking and warnings |
+| `paths.py` | ~55 | Centralized path construction for runtime data files |
 | `prompts.py` | 48 | BAML adapter: 2 scoring functions (score_summary, verify_claims) |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (28 modules, 414 tests)
+### Tests (29 modules, 450 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
@@ -485,8 +486,9 @@ ALTER TABLE summaries ADD COLUMN verification_score REAL;
 | `test_dry_run.py` | 14 | --dry-run for transcribe/summarize bulk/single |
 | `test_ux_improvements.py` | 14 | LLM caching, truncation, default prompt, version |
 | `test_cli.py` | ~25+ | CLI commands end-to-end |
-| `test_storage.py` | ~20 | Storage CRUD, migration, constraints |
-| `test_llm_connectivity.py` | ~15+ | LLM retry, connectivity, error handling |
+| `test_storage.py` | ~33 | Storage CRUD, migration, constraints, provenance, context managers, chunked IN |
+| `test_llm_connectivity.py` | ~19 | LLM retry, connectivity, error handling, get_model_name |
+| `test_paths.py` | 13 | Path construction, integration with Storage.urllist_path |
 | `test_yt_dlp_util.py` | 18 | Rate-limit config, cookies, delays, PO token, auth |
 | `test_prompts.py` | 11 | BAML scoring adapter, anti-hallucination content checks (summarizer + score.baml) |
 | Others | ~30+ | Fetcher, transcriber, summarizer, edge cases |
