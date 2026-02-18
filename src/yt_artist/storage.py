@@ -74,6 +74,8 @@ class SummaryRow(TypedDict, total=False):
     llm_score: Optional[float]
     faithfulness_score: Optional[float]
     verification_score: Optional[float]
+    model: Optional[str]
+    strategy: Optional[str]
 
 
 class TranscriptListRow(TypedDict, total=False):
@@ -155,6 +157,8 @@ class Storage:
             self._migrate_faithfulness_score_column(conn)
             conn.commit()
             self._migrate_verification_score_column(conn)
+            conn.commit()
+            self._migrate_provenance_columns(conn)
             conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
@@ -244,6 +248,16 @@ class Storage:
         names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
         if "verification_score" not in names:
             conn.execute("ALTER TABLE summaries ADD COLUMN verification_score REAL")
+
+    def _migrate_provenance_columns(self, conn: sqlite3.Connection) -> None:
+        """Add model and strategy columns to summaries if missing."""
+        cur = conn.execute("PRAGMA table_info(summaries)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "model" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN model TEXT")
+        if "strategy" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN strategy TEXT")
 
     # ------ Artists ------
 
@@ -499,18 +513,22 @@ class Storage:
         video_id: str,
         prompt_id: str,
         content: str,
+        model: Optional[str] = None,
+        strategy: Optional[str] = None,
     ) -> None:
         conn = self._conn()
         try:
             conn.execute(
                 """
-                INSERT INTO summaries (video_id, prompt_id, content, created_at)
-                VALUES (?, ?, ?, datetime('now'))
+                INSERT INTO summaries (video_id, prompt_id, content, created_at, model, strategy)
+                VALUES (?, ?, ?, datetime('now'), ?, ?)
                 ON CONFLICT(video_id, prompt_id) DO UPDATE SET
                     content = excluded.content,
-                    created_at = datetime('now')
+                    created_at = datetime('now'),
+                    model = excluded.model,
+                    strategy = excluded.strategy
                 """,
-                (video_id, prompt_id, content),
+                (video_id, prompt_id, content, model, strategy),
             )
             conn.commit()
         finally:

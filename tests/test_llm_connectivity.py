@@ -118,7 +118,8 @@ class TestCompleteRetry:
         with (
             patch("yt_artist.llm.get_client", return_value=mock_client),
             patch("yt_artist.llm._resolve_config", return_value=("http://localhost:11434/v1", "ollama", "mistral")),
-            patch("yt_artist.llm._time.sleep"),pytest.raises(RuntimeError, match="Ollama")
+            patch("yt_artist.llm._time.sleep"),
+            pytest.raises(RuntimeError, match="Ollama"),
         ):
             complete("sys", "user", max_retries=2)
         # 1 original + 2 retries = 3 calls
@@ -155,3 +156,47 @@ class TestCompleteRetry:
         assert len(sleep_times) == 2
         assert sleep_times[0] == 2  # initial backoff
         assert sleep_times[1] == 4  # doubled
+
+
+# ---------------------------------------------------------------------------
+# get_model_name() resolution
+# ---------------------------------------------------------------------------
+
+
+class TestGetModelName:
+    def test_default_returns_nonempty(self):
+        """get_model_name() with no args returns the config default."""
+        from yt_artist.llm import get_model_name
+
+        with patch.dict("os.environ", {}, clear=False):
+            # Remove OPENAI_MODEL if set to test pure default
+            import os
+
+            env = {k: v for k, v in os.environ.items() if k != "OPENAI_MODEL"}
+            with patch.dict("os.environ", env, clear=True):
+                name = get_model_name()
+                assert isinstance(name, str)
+                assert len(name) > 0
+
+    def test_explicit_arg_returned(self):
+        """Explicit model arg is returned as-is, overriding env and default."""
+        from yt_artist.llm import get_model_name
+
+        result = get_model_name("llama3")
+        assert result == "llama3"
+
+    def test_env_var_overrides_default(self):
+        """OPENAI_MODEL env var overrides the config default."""
+        from yt_artist.llm import get_model_name
+
+        with patch.dict("os.environ", {"OPENAI_MODEL": "gemma2"}, clear=False):
+            result = get_model_name()
+            assert result == "gemma2"
+
+    def test_explicit_arg_overrides_env(self):
+        """Explicit arg beats OPENAI_MODEL env var."""
+        from yt_artist.llm import get_model_name
+
+        with patch.dict("os.environ", {"OPENAI_MODEL": "gemma2"}, clear=False):
+            result = get_model_name("llama3")
+            assert result == "llama3"

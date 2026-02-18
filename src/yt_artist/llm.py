@@ -40,6 +40,12 @@ def _resolve_config() -> Tuple[str, str, str]:
     return (base_url, api_key or "ollama", "gpt-4o-mini")
 
 
+def get_model_name(model: Optional[str] = None) -> str:
+    """Return effective LLM model name from argument, env, or default."""
+    _, _, default_model = _resolve_config()
+    return model or os.environ.get("OPENAI_MODEL") or default_model
+
+
 def check_connectivity() -> None:
     """Fast pre-flight check: verify the LLM endpoint is reachable (TCP connect).
 

@@ -378,6 +378,91 @@ class TestChunkedInQueries:
         returned_ids = {r["video_id"] for r in result}
         assert returned_ids == set(ids[:600])
 
+    # -- provenance columns --
+
+    def test_upsert_summary_with_provenance(self, store):
+        """Provenance columns (model, strategy) are stored and retrievable."""
+        store.upsert_artist(
+            artist_id="UC_prov",
+            name="Prov",
+            channel_url="https://www.youtube.com/@prov",
+            urllist_path="data/artists/UC_prov/artistUC_provProv-urllist.md",
+        )
+        store.upsert_video(
+            video_id="pv1",
+            artist_id="UC_prov",
+            url="https://youtube.com/watch?v=pv1",
+            title="PV1",
+        )
+        store.upsert_prompt(prompt_id="pp", name="PP", template="test")
+        store.upsert_summary(
+            video_id="pv1",
+            prompt_id="pp",
+            content="Summary.",
+            model="mistral",
+            strategy="map-reduce",
+        )
+        rows = store.get_summaries_for_video("pv1")
+        assert len(rows) == 1
+        assert rows[0]["model"] == "mistral"
+        assert rows[0]["strategy"] == "map-reduce"
+
+    def test_upsert_summary_provenance_defaults_to_none(self, store):
+        """Backward compat: omitting model/strategy stores None."""
+        store.upsert_artist(
+            artist_id="UC_prov2",
+            name="Prov2",
+            channel_url="https://www.youtube.com/@prov2",
+            urllist_path="data/artists/UC_prov2/artistUC_prov2Prov2-urllist.md",
+        )
+        store.upsert_video(
+            video_id="pv2",
+            artist_id="UC_prov2",
+            url="https://youtube.com/watch?v=pv2",
+            title="PV2",
+        )
+        store.upsert_prompt(prompt_id="pp2", name="PP2", template="test")
+        store.upsert_summary(video_id="pv2", prompt_id="pp2", content="Summary.")
+        rows = store.get_summaries_for_video("pv2")
+        assert len(rows) == 1
+        assert rows[0]["model"] is None
+        assert rows[0]["strategy"] is None
+
+    def test_upsert_summary_provenance_updated_on_overwrite(self, store):
+        """Re-summarize updates provenance columns."""
+        store.upsert_artist(
+            artist_id="UC_prov3",
+            name="Prov3",
+            channel_url="https://www.youtube.com/@prov3",
+            urllist_path="data/artists/UC_prov3/artistUC_prov3Prov3-urllist.md",
+        )
+        store.upsert_video(
+            video_id="pv3",
+            artist_id="UC_prov3",
+            url="https://youtube.com/watch?v=pv3",
+            title="PV3",
+        )
+        store.upsert_prompt(prompt_id="pp3", name="PP3", template="test")
+        store.upsert_summary(
+            video_id="pv3",
+            prompt_id="pp3",
+            content="V1.",
+            model="mistral",
+            strategy="auto",
+        )
+        store.upsert_summary(
+            video_id="pv3",
+            prompt_id="pp3",
+            content="V2.",
+            model="gpt-4o-mini",
+            strategy="map-reduce",
+        )
+        rows = store.get_summaries_for_video("pv3")
+        assert len(rows) == 1
+        assert rows[0]["content"] == "V2."
+        assert rows[0]["model"] == "gpt-4o-mini"
+        assert rows[0]["strategy"] == "map-reduce"
+
     def test_unscored_without_video_ids(self, store):
         """No video_ids filter — should return all unscored for prompt."""
         store.upsert_artist(

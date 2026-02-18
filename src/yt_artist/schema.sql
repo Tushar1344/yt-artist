@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS summaries (
     llm_score REAL,
     faithfulness_score REAL,
     verification_score REAL,
+    model TEXT,
+    strategy TEXT,
     UNIQUE(video_id, prompt_id)
 );
 

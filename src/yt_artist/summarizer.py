@@ -379,9 +379,13 @@ def summarize(
     if not summary_text.strip():
         raise ValueError(f"LLM returned empty summary for video_id={video_id}")
 
+    from yt_artist.llm import get_model_name
+
     storage.upsert_summary(
         video_id=video_id,
         prompt_id=prompt_id,
         content=summary_text,
+        model=get_model_name(model),
+        strategy=strat,
     )
     return f"{video_id}:{prompt_id}"
