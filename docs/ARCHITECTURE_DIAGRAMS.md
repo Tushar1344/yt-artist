@@ -114,7 +114,7 @@ graph TD
   +--------------------------------------------------+
                                                       |
                                                       v
-  For each summary (sequential):            +--------+-------+
+  For each summary (parallel, N workers):   +--------+-------+
                                             |  score()       |
   +-----------------------------------------+                |
   |  1. Load summary + transcript from DB   |  Heuristic +   |
@@ -370,20 +370,20 @@ flowchart TD
 ## 7. Parallel Execution Model
 
 ```
-  Bulk transcribe --artist-id @TED (50 videos, 23 already done)
+  Bulk transcribe/summarize/score --artist-id @TED
        |
-       +-- Batch query: SELECT video_id FROM transcripts WHERE ...
-       +-- Filter: 27 videos remaining
-       +-- maybe_suggest_background(27, "transcribe", ...)
-       |     --> stderr: "This will process 27 videos (~4m). Try --bg"
+       +-- Batch query: find remaining items to process
+       +-- Filter: N items remaining
+       +-- maybe_suggest_background(N, "command", ...)
+       |     --> stderr: "This will process N items (~Xm). Try --bg"
        |
        v
-  ThreadPoolExecutor(max_workers=2)
+  ThreadPoolExecutor(max_workers=concurrency)     # --concurrency flag, default 2
        |
        +-- Worker 1:                    +-- Worker 2:
-       |   video_1 -> transcribe()      |   video_2 -> transcribe()
+       |   item_1 -> process()          |   item_2 -> process()
        |   sleep(inter_video_delay)     |   sleep(inter_video_delay)
-       |   video_3 -> transcribe()      |   video_4 -> transcribe()
+       |   item_3 -> process()          |   item_4 -> process()
        |   ...                          |   ...
        |                                |
        +-- Both update shared _ProgressCounter (thread-safe via Lock)
@@ -393,8 +393,16 @@ flowchart TD
        v
   All futures complete
        +-- progress.finalize(status='completed')
-       +-- Print: "Done: 27/27 (0 errors)"
-       +-- _hint(): "Next: summarize --artist-id @TED"
+       +-- Print: "Done: N/N (0 errors)"
+       +-- _hint(): context-aware next step
+
+  All bulk commands use this pattern: transcribe, summarize, score.
+  Score additionally prints per-item detail (quality, faithfulness, verification).
+
+  Nested parallelism in map-reduce:
+       +-- Outer: bulk summarize workers (max_workers=2)
+       +-- Inner: map-reduce chunk workers (max_workers=_MAP_CONCURRENCY=3)
+       +-- Total threads bounded: outer × inner = 6 max
 ```
 
 ## 8. Pipeline Parallelism (3-Stage)
@@ -464,9 +472,11 @@ Key design decisions:
        |      |     +-- Overlap: 500 chars (clamped to chunk_size/2)
        |      |     +-- Boundaries: ". ", "\n", "? ", "! "
        |      |
-       |      +-- MAP: summarize each chunk independently (parallelizable)
+       |      +-- MAP: summarize each chunk in parallel (ThreadPoolExecutor)
        |      |     +-- "Summarize section {i} of {n}..."
        |      |     +-- N LLM calls (e.g., 5 for 150K chars)
+       |      |     +-- Concurrency: _MAP_CONCURRENCY (default 3, env YT_ARTIST_MAP_CONCURRENCY)
+       |      |     +-- Results reassembled in original chunk order
        |      |
        |      +-- REDUCE: concatenate chunk summaries
        |      |     +-- Fits context? --> one final LLM call

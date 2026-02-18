@@ -125,16 +125,16 @@ export DB=./yt.db
 | `jobs attach <job_id>` | Tail the log of a job. Press Ctrl-C to detach (job keeps running). |
 | `jobs stop <job_id>` | Send SIGTERM to stop a running background job. |
 | `jobs clean` | Remove finished jobs older than 7 days and their log files. |
-| `score` [--artist-id @X] [--prompt ID] [--skip-llm] [--verify] | Score summaries for quality (heuristic + LLM self-check). `--verify` adds claim verification. |
+| `score` [--artist-id @X] [--prompt ID] [--skip-llm] [--verify] | Score summaries for quality (heuristic + LLM self-check). `--verify` adds claim verification. Parallel execution with `--concurrency`. Supports `--dry-run`. |
 | `status` | Overview: artists, videos, transcripts, summaries (with scoring stats), jobs, DB size. |
 | `quickstart` | Print a guided 3-step walkthrough using @TED as an example. |
 | `doctor` | Check your setup: yt-dlp installation, YouTube authentication, PO token, LLM endpoint, test metadata fetch. |
 
-**Global options:** `--db PATH`, `--data-dir PATH`, `--bg` (run in background), `-q`/`--quiet` (suppress hints)
+**Global options:** `--db PATH`, `--data-dir PATH`, `--bg` (run in background), `-q`/`--quiet` (suppress hints), `--dry-run` (preview without executing), `--concurrency N` (parallel workers, 1-3)
 
 **Summarize options:** `--strategy {auto,truncate,map-reduce,refine}`, `--score`/`--no-score`
 
-**Score options:** `--skip-llm` (heuristic-only, zero LLM calls), `--verify` (claim verification, 1 extra LLM call per summary)
+**Score options:** `--skip-llm` (heuristic-only, zero LLM calls), `--verify` (claim verification, 1 extra LLM call per summary). Runs in parallel when `--concurrency` > 1.
 
 > **Note:** Global options must appear **before** the subcommand. For example: `yt-artist --quiet summarize ...` (correct), not `yt-artist summarize ... --quiet` (error).
 
@@ -147,9 +147,9 @@ export DB=./yt.db
 - **"Dependencies: …" messages:** When the tool auto-creates something (e.g. urllist or transcripts), it prints one short line so you know what was done, e.g. `Dependencies: artist/videos missing → fetched urllist for @NateBJones (42 videos).`
 - **Background jobs:** When processing 5+ videos, yt-artist suggests running in the background. Add `--bg` to any bulk command to detach it. The job runs as a separate process; you can close your terminal and it keeps going. Use `yt-artist jobs` to check progress, `jobs attach <id>` to tail the log, or `jobs stop <id>` to cancel. Job IDs are short (first 8 hex chars shown); prefix matching works.
 - **Next-step hints:** After each command, yt-artist prints a hint to stderr suggesting what to do next. For example, after `fetch-channel`, it suggests `transcribe`. Use `--quiet` to suppress all hints.
-- **Parallel execution:** Bulk transcribe and summarize process videos in parallel (default: 2 workers). Control with `YT_ARTIST_MAX_CONCURRENCY`.
+- **Parallel execution:** Bulk transcribe, summarize, and score process videos in parallel (default: 2 workers). Control with `YT_ARTIST_MAX_CONCURRENCY`. Map-reduce chunk summaries also run in parallel (default: 3 workers, set `YT_ARTIST_MAP_CONCURRENCY`).
 - **Rate-limit safety:** yt-dlp requests include sleep intervals between requests. Inter-video delay (default 2s) prevents hammering YouTube. All configurable via environment variables.
-- **Summarization strategies:** Long transcripts (>30K chars) are automatically chunked and summarized using map-reduce. Use `--strategy refine` for maximum coherence on important videos. The `auto` strategy (default) picks the best approach based on transcript length.
+- **Summarization strategies:** Long transcripts (>30K chars) are automatically chunked and summarized using map-reduce. The map phase runs chunks in parallel for speed (configurable via `YT_ARTIST_MAP_CONCURRENCY`). Use `--strategy refine` for maximum coherence on important videos. The `auto` strategy (default) picks the best approach based on transcript length.
 - **Quality scoring:** After summarization, each summary can be scored automatically. Heuristic scoring (instant, no LLM cost) checks length ratio, repetition, key-term coverage, structure, and **named entity verification** (catches hallucinated names like "Elijah Wood" that never appeared in the transcript). LLM self-check (1 extra tiny call) rates completeness, coherence, and faithfulness. **Faithfulness is tracked separately** — summaries with low faithfulness (≤ 0.4) are flagged with `[!LOW FAITHFULNESS]` in CLI output. Scoring runs automatically during bulk summarize (skipped for very long runs >3h; override with `--score`). Run `yt-artist score --artist-id @X` to score existing summaries.
 - **Claim verification (opt-in):** Add `--verify` to any `score` command for deep fact-checking. This makes 1 extra LLM call per summary: the LLM extracts 5 factual claims from the summary and cross-references each against the transcript. Results show `verified=80%` (or whatever percentage). Use this on important summaries where accuracy matters.
 
@@ -232,6 +232,7 @@ Cookies and PO token can be used together (they serve different purposes: cookie
 ## Environment (rate limits & performance)
 
 - **`YT_ARTIST_MAX_CONCURRENCY`** — Max parallel workers for bulk operations (default: 2). Higher values are faster but risk YouTube rate limits.
+- **`YT_ARTIST_MAP_CONCURRENCY`** — Max parallel workers for map-reduce chunk summaries (default: 3). Set to 1 if using local Ollama (processes requests sequentially anyway). Against OpenAI API, parallelism provides real speedup.
 - **`YT_ARTIST_INTER_VIDEO_DELAY`** — Seconds to wait between videos in bulk operations (default: 2.0).
 - **`YT_ARTIST_SLEEP_REQUESTS`** — yt-dlp `--sleep-requests` value in seconds (default: 1.5).
 - **`YT_ARTIST_SLEEP_SUBTITLES`** — yt-dlp `--sleep-subtitles` value in seconds (default: 2).
