@@ -125,6 +125,25 @@ class Storage:
         finally:
             conn.close()
 
+    @contextmanager
+    def _read_conn(self) -> Generator[sqlite3.Connection, None, None]:
+        """Context manager for read-only DB operations; auto-closes."""
+        conn = self._conn()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _write_conn(self) -> Generator[sqlite3.Connection, None, None]:
+        """Context manager for single writes; auto-commits and closes."""
+        conn = self._conn()
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
     # Built-in default prompt shipped with the package — zero-config summarize.
     _DEFAULT_PROMPT_ID = "default"
     _DEFAULT_PROMPT_NAME = "Default Summary"
@@ -290,12 +309,9 @@ class Storage:
             conn.close()
 
     def get_artist(self, artist_id: str) -> Optional[ArtistRow]:
-        conn = self._conn()
-        try:
+        with self._read_conn() as conn:
             cur = conn.execute("SELECT * FROM artists WHERE id = ?", (artist_id,))
             return cur.fetchone()  # type: ignore[return-value]
-        finally:
-            conn.close()
 
     def get_artist_default_prompt_id(self, artist_id: str) -> Optional[str]:
         artist = self.get_artist(artist_id)
@@ -305,26 +321,18 @@ class Storage:
         return pid if pid else None
 
     def set_artist_default_prompt(self, artist_id: str, prompt_id: str) -> None:
-        conn = self._conn()
-        try:
+        with self._write_conn() as conn:
             conn.execute(
                 "UPDATE artists SET default_prompt_id = ? WHERE id = ?",
                 (prompt_id, artist_id),
             )
-            conn.commit()
-        finally:
-            conn.close()
 
     def set_artist_about(self, artist_id: str, about: Optional[str]) -> None:
-        conn = self._conn()
-        try:
+        with self._write_conn() as conn:
             conn.execute(
                 "UPDATE artists SET about = ? WHERE id = ?",
                 (about or "", artist_id),
             )
-            conn.commit()
-        finally:
-            conn.close()
 
     def list_artists(self) -> List[ArtistRow]:
         conn = self._conn()
@@ -377,12 +385,9 @@ class Storage:
             conn.close()
 
     def get_video(self, video_id: str) -> Optional[VideoRow]:
-        conn = self._conn()
-        try:
+        with self._read_conn() as conn:
             cur = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,))
             return cur.fetchone()  # type: ignore[return-value]
-        finally:
-            conn.close()
 
     # ------ Transcripts ------
 
@@ -682,13 +687,10 @@ class Storage:
 
     def count_artists(self) -> int:
         """Return total number of artists."""
-        conn = self._conn()
-        try:
+        with self._read_conn() as conn:
             cur = conn.execute("SELECT COUNT(*) AS cnt FROM artists")
             row = cur.fetchone()
             return row["cnt"] if isinstance(row, dict) else row[0]
-        finally:
-            conn.close()
 
     def count_videos(self) -> int:
         """Return total number of videos."""

@@ -483,3 +483,37 @@ class TestChunkedInQueries:
         result = store.get_unscored_summaries("p3")
         assert len(result) == 1
         assert result[0]["video_id"] == "vu1"
+
+
+# ---------------------------------------------------------------------------
+# Connection context manager tests
+# ---------------------------------------------------------------------------
+
+
+class TestConnectionContextManagers:
+    def test_read_conn_returns_data(self, store):
+        """_read_conn() works for read operations."""
+        store.upsert_artist(
+            artist_id="UC_ctx",
+            name="Ctx",
+            channel_url="https://www.youtube.com/@ctx",
+            urllist_path="data/artists/UC_ctx/artistUC_ctxCtx-urllist.md",
+        )
+        # get_artist now uses _read_conn internally
+        artist = store.get_artist("UC_ctx")
+        assert artist is not None
+        assert artist["name"] == "Ctx"
+
+    def test_write_conn_commits(self, store):
+        """_write_conn() auto-commits writes."""
+        store.upsert_artist(
+            artist_id="UC_wctx",
+            name="WriteCtx",
+            channel_url="https://www.youtube.com/@wctx",
+            urllist_path="data/artists/UC_wctx/artistUC_wctxWriteCtx-urllist.md",
+        )
+        store.upsert_prompt(prompt_id="wctx_p", name="WP", template="t")
+        # set_artist_default_prompt uses _write_conn internally
+        store.set_artist_default_prompt("UC_wctx", "wctx_p")
+        artist = store.get_artist("UC_wctx")
+        assert artist["default_prompt_id"] == "wctx_p"
