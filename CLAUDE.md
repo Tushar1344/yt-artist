@@ -17,7 +17,7 @@ Python 3.9+ CLI: fetch YouTube channel videos, transcribe via yt-dlp, summarize 
 - src/yt_artist/ — package source (cli.py is entrypoint, storage.py is DB layer)
 - baml_src/ — BAML prompt definitions (.baml files, git-versioned)
 - tests/ — pytest tests (conftest.py has db_path and store fixtures)
-- scripts/ — install and wrapper scripts
+- scripts/ — install, wrapper, and monitoring scripts (monitor.sh = live dashboard)
 - docs/ — ADRs, plans, journey, parking lot
 - data/ — runtime data dir (gitignored)
 
@@ -31,6 +31,8 @@ pip install -e ".[dev]"                                  # install dev deps
 python -m yt_artist.cli --help                           # CLI help
 ruff format src/ tests/                                  # format
 ruff check src/ tests/ --fix                             # lint + autofix
+./scripts/monitor.sh                                     # live dashboard (per-artist progress, jobs, processes, rate limits)
+./scripts/monitor.sh 10                                  # dashboard with 10s refresh
 ```
 
 ## Key Patterns
