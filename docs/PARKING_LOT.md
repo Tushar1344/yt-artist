@@ -174,6 +174,21 @@ DB size:      12.4 MB
 
 ---
 
+### 23. cli.py structural refactor: AppContext + _cmd_summarize decomposition `[suggestion]`
+**Why:** cli.py is ~1,600 lines with 14 `_cmd_*` functions. Manageable now but `_cmd_summarize` alone is 297 lines mixing 4 concerns (single-video, bulk-sequential, pipeline, scoring setup). Three module-level globals (`_quiet`, `_bg_job_id`, `_bg_storage`) couple helpers to implicit state.
+
+**Recommended approach (2 steps):**
+1. **AppContext dataclass** — replace the 3 globals + `(args, storage, data_dir)` triple with a single context object. Prerequisite for any further splitting. Improves testability immediately.
+2. **Break up `_cmd_summarize`** — extract `_summarize_single()`, `_summarize_bulk_sequential()`, `_summarize_pipeline()` as private helpers. Same file, just cleaner.
+
+**Deferred (only when needed):**
+- `commands/` package split — only justified when adding a second entrypoint (API server, TUI) or hitting 2500+ lines. mcp_server.py already imports domain modules directly (zero coupling to cli.py).
+- `use_cases/` layer — domain logic already lives in fetcher/transcriber/summarizer/scorer/pipeline. Adding a third layer between cli and domain has little benefit today.
+
+**Effort:** Medium. AppContext is mechanical but touches all 14 commands + helpers. _cmd_summarize decomposition is contained. Test disruption is moderate (many tests patch sys.argv + call main()).
+
+---
+
 ### 11. Tech debt: `--_bg-worker` re-execution pattern `[suggestion]`
 **Why:** Re-executing the CLI as a subprocess is fragile. If the user's environment changes (PATH, venv activation) between parent and child, the child may fail silently. Works now but should be flagged.
 
