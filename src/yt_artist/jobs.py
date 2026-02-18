@@ -37,7 +37,9 @@ def _generate_job_id() -> str:
 
 def jobs_dir(data_dir: Path) -> Path:
     """Return the jobs log directory, creating it if needed."""
-    d = data_dir / "data" / "jobs"
+    from yt_artist.paths import jobs_dir as _jobs_dir
+
+    d = _jobs_dir(data_dir)
     d.mkdir(parents=True, exist_ok=True)
     return d
 

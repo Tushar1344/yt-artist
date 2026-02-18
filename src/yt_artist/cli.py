@@ -198,7 +198,9 @@ def _default_data_dir() -> Path:
 
 
 def _default_db_path(data_dir: Path) -> Path:
-    return data_dir / "data" / "yt_artist.db"
+    from yt_artist.paths import db_path
+
+    return db_path(data_dir)
 
 
 def main() -> None:

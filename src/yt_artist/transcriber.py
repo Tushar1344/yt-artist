@@ -403,9 +403,10 @@ def transcribe(
     storage.save_transcript(video_id=video_id, raw_text=raw_text, format=fmt)
 
     if write_transcript_file and data_dir is not None and artist_id:
-        data_dir = Path(data_dir)
-        transcript_dir = data_dir / "artists" / artist_id / "transcripts"
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-        (transcript_dir / f"{video_id}.txt").write_text(raw_text, encoding="utf-8")
+        from yt_artist.paths import transcript_file
+
+        out_file = transcript_file(Path(data_dir), artist_id, video_id)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(raw_text, encoding="utf-8")
 
     return video_id

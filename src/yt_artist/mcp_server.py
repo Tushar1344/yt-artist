@@ -21,9 +21,11 @@ _storage_instance: Optional[Storage] = None
 def _get_storage() -> Storage:
     global _storage_instance
     if _storage_instance is None:
+        from yt_artist.paths import db_path as _db_path
+
         data_dir = Path(os.environ.get("YT_ARTIST_DATA_DIR", os.getcwd()))
-        db_path = Path(os.environ.get("YT_ARTIST_DB", str(data_dir / "data" / "yt_artist.db")))
-        _storage_instance = Storage(db_path)
+        resolved = Path(os.environ.get("YT_ARTIST_DB", str(_db_path(data_dir))))
+        _storage_instance = Storage(resolved)
         _storage_instance.ensure_schema()
     return _storage_instance
 

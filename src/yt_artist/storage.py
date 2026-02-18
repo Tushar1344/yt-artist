@@ -1,7 +1,6 @@
 """Storage layer: SQLite CRUD for artists, videos, transcripts, prompts, summaries."""
 
 import logging
-import re
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -735,5 +734,6 @@ class Storage:
 
     def urllist_path(self, artist_id: str, artist_name: str) -> str:
         """Compute path for artist urllist file: artist{id}{sanitized_name}-urllist.md"""
-        safe_name = re.sub(r"[^\w\-]", "_", artist_name).strip("_") or "channel"
-        return f"data/artists/{artist_id}/artist{artist_id}{safe_name}-urllist.md"
+        from yt_artist.paths import urllist_rel_path
+
+        return urllist_rel_path(artist_id, artist_name)
