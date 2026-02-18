@@ -152,13 +152,13 @@ class TestTranscriptTruncation:
         from yt_artist.summarizer import summarize
 
         with (
-            patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="Summary text") as mock_single,
+            patch("yt_artist.summarizer.llm_complete", return_value="Summary text") as mock_single,
             patch.dict(os.environ, {"YT_ARTIST_MAX_TRANSCRIPT_CHARS": "1000"}),
         ):
             summarize("vid001234567", "p1", store, strategy="truncate")
-        # The transcript kwarg passed to summarize_single_pass should be truncated to 1000 chars
+        # The user_content kwarg passed to llm_complete should be truncated to 1000 chars
         call_args = mock_single.call_args
-        transcript = call_args.kwargs.get("transcript")
+        transcript = call_args.kwargs.get("user_content")
         assert len(transcript) == 1000
 
     def test_short_transcript_not_truncated(self, tmp_path):
@@ -178,11 +178,11 @@ class TestTranscriptTruncation:
 
         from yt_artist.summarizer import summarize
 
-        with patch("yt_artist.summarizer.prompts.summarize_single_pass", return_value="Summary text") as mock_single:
+        with patch("yt_artist.summarizer.llm_complete", return_value="Summary text") as mock_single:
             summarize("vid001234567", "p1", store)
-        # The transcript kwarg should be the full short text (no truncation)
+        # The user_content kwarg should be the full short text (no truncation)
         call_args = mock_single.call_args
-        transcript = call_args.kwargs.get("transcript")
+        transcript = call_args.kwargs.get("user_content")
         assert transcript == "Short text"
 
 

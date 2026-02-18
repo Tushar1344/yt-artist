@@ -113,31 +113,29 @@ class TestGetStrategy:
 
 
 # ---------------------------------------------------------------------------
-# _summarize_single (now calls prompts.summarize_single_pass)
+# _summarize_single (calls llm_complete)
 # ---------------------------------------------------------------------------
 
 
 class TestSummarizeSingle:
-    @patch("yt_artist.summarizer.prompts.summarize_single_pass")
-    def test_calls_baml(self, mock_single):
-        mock_single.return_value = "Summary result"
-        result = _summarize_single("raw transcript text", "TestArtist", "Test Video")
+    @patch("yt_artist.summarizer.llm_complete")
+    def test_calls_llm(self, mock_llm):
+        mock_llm.return_value = "Summary result"
+        result = _summarize_single("raw transcript text", "Summarize this video")
         assert result == "Summary result"
-        mock_single.assert_called_once_with(
-            transcript="raw transcript text", artist="TestArtist", video_title="Test Video"
-        )
+        mock_llm.assert_called_once_with(system_prompt="Summarize this video", user_content="raw transcript text")
 
 
 # ---------------------------------------------------------------------------
-# _summarize_map_reduce (now calls prompts.summarize_chunk + reduce_chunk_summaries)
+# _summarize_map_reduce (calls llm_complete for chunk + reduce)
 # ---------------------------------------------------------------------------
 
 
 class TestMapReduce:
-    @patch("yt_artist.summarizer.prompts.summarize_single_pass")
-    def test_short_text_single_pass(self, mock_single):
+    @patch("yt_artist.summarizer.llm_complete")
+    def test_short_text_single_pass(self, mock_llm):
         """Text shorter than max_chars should use a single pass via _summarize_single."""
-        mock_single.return_value = "Final summary"
+        mock_llm.return_value = "Final summary"
         # Short text fits — _summarize_map_reduce's _chunk_text returns 1 chunk
         # but map-reduce always chunks + reduces, so short text → 1 chunk map + reduce
         # Actually, _chunk_text returns [text] if len <= chunk_size, so we get 1 chunk.
@@ -145,61 +143,67 @@ class TestMapReduce:
         # calls _summarize_single in summarize(). Test the map-reduce function directly:
         pass  # Covered by test_long_text_multiple_chunks below
 
-    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
-    def test_long_text_multiple_chunks(self, mock_chunk, mock_reduce):
+    @patch("yt_artist.summarizer.llm_complete")
+    def test_long_text_multiple_chunks(self, mock_llm):
         """Long text gets chunked, mapped, and reduced."""
-        mock_chunk.return_value = "Chunk summary"
-        mock_reduce.return_value = "Final combined"
+        # llm_complete is called for each chunk (map) and once for reduce.
+        # Return "Chunk summary" for map calls, "Final combined" for the reduce call.
+        call_count = [0]
+
+        def _smart_return(**kwargs):
+            call_count[0] += 1
+            # The reduce call has _REDUCE_SUFFIX in its system_prompt
+            if "Combine them into a single coherent summary" in kwargs.get("system_prompt", ""):
+                return "Final combined"
+            return "Chunk summary"
+
+        mock_llm.side_effect = _smart_return
         # Create text that exceeds max_chars
         long_text = ". ".join(f"Sentence {i} with some content here" for i in range(100))
-        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video Title")
-        # Should have called summarize_chunk multiple times (map)
-        assert mock_chunk.call_count >= 2
-        # Should have called reduce once
-        mock_reduce.assert_called_once()
+        result = _summarize_map_reduce(long_text, 2000, "Summarize this")
+        # Should have called llm_complete multiple times (map chunks + 1 reduce)
+        assert mock_llm.call_count >= 3  # at least 2 chunks + 1 reduce
         assert result == "Final combined"
 
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
-    def test_empty_chunk_summaries_raises(self, mock_chunk):
+    @patch("yt_artist.summarizer.llm_complete")
+    def test_empty_chunk_summaries_raises(self, mock_llm):
         """If all chunk summaries are empty, raises ValueError."""
-        mock_chunk.return_value = "   "
+        mock_llm.return_value = "   "
         long_text = ". ".join(f"Sentence {i} with some content here" for i in range(100))
         with pytest.raises(ValueError, match="no chunk summaries"):
-            _summarize_map_reduce(long_text, 2000, "Artist", "Video Title")
+            _summarize_map_reduce(long_text, 2000, "Summarize this")
 
 
 # ---------------------------------------------------------------------------
-# _summarize_refine (now calls prompts.summarize_single_pass + refine_summary)
+# _summarize_refine (calls llm_complete for initial + refine passes)
 # ---------------------------------------------------------------------------
 
 
 class TestRefine:
-    @patch("yt_artist.summarizer.prompts.summarize_single_pass")
-    def test_short_text_single_call(self, mock_single):
+    @patch("yt_artist.summarizer.llm_complete")
+    def test_short_text_single_call(self, mock_llm):
         """Short text within max_chars = single call (acts like single-pass)."""
-        mock_single.return_value = "Refined summary"
-        result = _summarize_refine("Short text.", 1000, "Artist", "Video")
+        mock_llm.return_value = "Refined summary"
+        result = _summarize_refine("Short text.", 1000, "Summarize this")
         assert result == "Refined summary"
-        mock_single.assert_called_once()
+        mock_llm.assert_called_once()
 
-    @patch("yt_artist.summarizer.prompts.refine_summary")
-    @patch("yt_artist.summarizer.prompts.summarize_single_pass")
-    def test_long_text_iterative_refinement(self, mock_single, mock_refine):
+    @patch("yt_artist.summarizer.llm_complete")
+    def test_long_text_iterative_refinement(self, mock_llm):
         """Long text gets refined iteratively across chunks."""
-        mock_single.return_value = "Initial summary"
         call_count = [0]
 
-        def _fake_refine(**kwargs):
+        def _fake_llm(**kwargs):
             call_count[0] += 1
-            return f"Summary v{call_count[0] + 1}"
+            if call_count[0] == 1:
+                return "Initial summary"
+            return f"Summary v{call_count[0]}"
 
-        mock_refine.side_effect = _fake_refine
+        mock_llm.side_effect = _fake_llm
         long_text = ". ".join(f"Sentence {i} with some content here" for i in range(100))
-        result = _summarize_refine(long_text, 2000, "Artist", "Video")
-        # Should have called single_pass once (initial) + refine per subsequent chunk
-        mock_single.assert_called_once()
-        assert mock_refine.call_count >= 1
+        result = _summarize_refine(long_text, 2000, "Summarize this")
+        # Should have called llm_complete once (initial) + once per subsequent chunk
+        assert mock_llm.call_count >= 2
         # Final result is last refine call
         assert "Summary v" in result
 
@@ -212,81 +216,108 @@ class TestRefine:
 class TestParallelMapReduce:
     """Tests for parallelized map phase in _summarize_map_reduce."""
 
-    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer.llm_complete")
     @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
-    def test_parallel_produces_correct_output(self, mock_chunk, mock_reduce):
-        """Multiple chunks with concurrency > 1 → parallel path, correct result."""
-        mock_chunk.side_effect = lambda chunk, chunk_index, total_chunks: f"Summary {chunk_index}"
-        mock_reduce.return_value = "Final"
+    def test_parallel_produces_correct_output(self, mock_llm):
+        """Multiple chunks with concurrency > 1 -> parallel path, correct result."""
+        call_count = [0]
+
+        def _smart_return(**kwargs):
+            call_count[0] += 1
+            if "Combine them into a single coherent summary" in kwargs.get("system_prompt", ""):
+                return "Final"
+            # Chunk map call — extract chunk_index from the system_prompt
+            return f"Summary {call_count[0]}"
+
+        mock_llm.side_effect = _smart_return
         long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
-        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video")
-        assert mock_chunk.call_count >= 2
-        mock_reduce.assert_called_once()
+        result = _summarize_map_reduce(long_text, 2000, "Summarize this")
+        assert mock_llm.call_count >= 3  # at least 2 chunks + 1 reduce
         assert result == "Final"
 
-    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer.llm_complete")
     @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
-    def test_chunk_ordering_preserved(self, mock_chunk, mock_reduce):
+    def test_chunk_ordering_preserved(self, mock_llm):
         """Parallel results reassembled in original chunk order."""
         import time
 
-        def _delayed_chunk(chunk, chunk_index, total_chunks):
-            # Odd chunks take longer → finish out of order
-            if chunk_index % 2 == 1:
-                time.sleep(0.02)
-            return f"Summary-{chunk_index}"
+        def _smart_return(**kwargs):
+            sp = kwargs.get("system_prompt", "")
+            if "Combine them into a single coherent summary" in sp:
+                # Reduce call — return the combined section text as-is for inspection
+                return kwargs.get("user_content", "")
+            # Chunk map call — extract chunk_index from system_prompt
+            # system_prompt contains "section {chunk_index} of {total_chunks}"
+            import re
 
-        mock_chunk.side_effect = _delayed_chunk
-        mock_reduce.side_effect = lambda section_summaries, artist, video_title: section_summaries
+            m = re.search(r"section (\d+) of (\d+)", sp)
+            idx = int(m.group(1)) if m else 0
+            # Odd chunks take longer to finish out of order
+            if idx % 2 == 1:
+                time.sleep(0.02)
+            return f"Summary-{idx}"
+
+        mock_llm.side_effect = _smart_return
 
         long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
-        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video")
+        result = _summarize_map_reduce(long_text, 2000, "Summarize this")
         # The reduce receives sections in order: Section 1, Section 2, ...
         sections = result.split("\n\n---\n\n")
         for i, section in enumerate(sections, 1):
             assert section.startswith(f"Section {i}:")
             assert f"Summary-{i}" in section
 
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer.llm_complete")
     @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
-    def test_chunk_error_propagates(self, mock_chunk):
+    def test_chunk_error_propagates(self, mock_llm):
         """Exception in one chunk propagates (pool shuts down)."""
+        call_count = [0]
 
-        def _failing_chunk(chunk, chunk_index, total_chunks):
-            if chunk_index == 2:
+        def _failing_llm(**kwargs):
+            call_count[0] += 1
+            sp = kwargs.get("system_prompt", "")
+            # Check for "section 2 of" in system prompt to simulate chunk 2 failure
+            if "section 2 of" in sp:
                 raise RuntimeError("LLM exploded on chunk 2")
-            return f"Summary {chunk_index}"
+            return f"Summary {call_count[0]}"
 
-        mock_chunk.side_effect = _failing_chunk
+        mock_llm.side_effect = _failing_llm
         long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
         with pytest.raises(RuntimeError, match="LLM exploded"):
-            _summarize_map_reduce(long_text, 2000, "Artist", "Video")
+            _summarize_map_reduce(long_text, 2000, "Summarize this")
 
-    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer.llm_complete")
     @patch("yt_artist.summarizer._MAP_CONCURRENCY", 1)
-    def test_concurrency_one_uses_sequential_path(self, mock_chunk, mock_reduce):
-        """_MAP_CONCURRENCY=1 → sequential path (no ThreadPoolExecutor)."""
-        mock_chunk.return_value = "Chunk summary"
-        mock_reduce.return_value = "Final"
+    def test_concurrency_one_uses_sequential_path(self, mock_llm):
+        """_MAP_CONCURRENCY=1 -> sequential path (no ThreadPoolExecutor)."""
+
+        def _smart_return(**kwargs):
+            if "Combine them into a single coherent summary" in kwargs.get("system_prompt", ""):
+                return "Final"
+            return "Chunk summary"
+
+        mock_llm.side_effect = _smart_return
         long_text = ". ".join(f"Sentence {i} with some padding here" for i in range(100))
-        result = _summarize_map_reduce(long_text, 2000, "Artist", "Video")
-        assert mock_chunk.call_count >= 2
+        result = _summarize_map_reduce(long_text, 2000, "Summarize this")
+        assert mock_llm.call_count >= 3  # at least 2 chunks + 1 reduce
         assert result == "Final"
 
-    @patch("yt_artist.summarizer.prompts.reduce_chunk_summaries")
-    @patch("yt_artist.summarizer.prompts.summarize_chunk")
+    @patch("yt_artist.summarizer.llm_complete")
     @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
-    def test_single_chunk_skips_pool(self, mock_chunk, mock_reduce):
-        """Single chunk → max_workers=1 → sequential path regardless of _MAP_CONCURRENCY."""
-        mock_chunk.return_value = "Only chunk"
-        mock_reduce.return_value = "Final"
+    def test_single_chunk_skips_pool(self, mock_llm):
+        """Single chunk -> max_workers=1 -> sequential path regardless of _MAP_CONCURRENCY."""
+
+        def _smart_return(**kwargs):
+            if "Combine them into a single coherent summary" in kwargs.get("system_prompt", ""):
+                return "Final"
+            return "Only chunk"
+
+        mock_llm.side_effect = _smart_return
         # Short enough for 1 chunk
         text = "Short text that fits in one chunk."
-        result = _summarize_map_reduce(text, 10000, "Artist", "Video")
-        assert mock_chunk.call_count == 1
+        result = _summarize_map_reduce(text, 10000, "Summarize this")
+        # 1 chunk call + 1 reduce call = 2 total
+        assert mock_llm.call_count == 2
         assert result == "Final"
 
 

@@ -47,7 +47,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Pipeline parallelism: producer-consumer with DB-polling in pipeline.py (ADR-0012)
 - Long-transcript strategies: auto/truncate/map-reduce/refine in summarizer.py (ADR-0013)
 - Quality scoring: heuristic + LLM self-check in scorer.py, decoupled 3rd pipeline stage
-- BAML prompts: .baml files → baml-cli generate → baml_client/ → prompts.py adapter (ADR-0014)
+- BAML prompts: scoring/verification only (.baml files → baml_client/ → prompts.py adapter). Summarization uses DB-stored templates rendered via _fill_template() in summarizer.py.
 - Hallucination guardrails: entity verification, faithfulness tracking, --verify claim check in scorer.py
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests

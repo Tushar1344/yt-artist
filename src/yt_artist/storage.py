@@ -126,7 +126,10 @@ class Storage:
         "Artist/channel context: {artist}\n"
         "Video title: {video}\n"
         "{intent}\n{audience}\n\n"
-        "Provide a clear, concise summary of the key points discussed in the transcript."
+        "Provide a clear, concise summary of the key points discussed in the transcript.\n\n"
+        "IMPORTANT: Only state facts, names, quotes, and claims that appear in the transcript. "
+        "Do not invent or assume anything not explicitly stated. "
+        "If you are uncertain about a detail, omit it rather than guess."
     )
 
     def ensure_schema(self) -> None:
