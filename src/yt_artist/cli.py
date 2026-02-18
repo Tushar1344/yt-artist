@@ -57,6 +57,16 @@ def _hint(*lines: str) -> None:
         sys.stderr.write(f"  {line}\n")
 
 
+def _json_print(data: object, args: argparse.Namespace) -> bool:
+    """If --json is active, print *data* as JSON to stdout and return True; else return False."""
+    if not getattr(args, "json_output", False):
+        return False
+    import json
+
+    print(json.dumps(data, default=str, indent=2))
+    return True
+
+
 def _report_dependency(message: str) -> None:
     """Log one short line when auto-creating dependencies."""
     log.info("Dependencies: %s", message)
@@ -255,6 +265,13 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Suppress next-step hints after commands (for scripting/piping)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        dest="json_output",
+        help="Output as JSON (for scripting). Supported by: list-prompts, search-transcripts, status, jobs list, doctor.",
     )
     parser.add_argument(
         "--bg",
@@ -976,6 +993,8 @@ def _cmd_add_prompt(args: argparse.Namespace, storage: Storage, data_dir: Path) 
 def _cmd_list_prompts(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
     """List stored prompt templates."""
     rows = storage.list_prompts()
+    if _json_print([{"id": r["id"], "name": r["name"], "template": r["template"]} for r in rows], args):
+        return
     if not rows:
         print("No prompts stored. Add one with: yt-artist add-prompt --id <id> --name <name> --template '...'")
         return
@@ -1053,6 +1072,19 @@ def _cmd_build_artist_prompt(args: argparse.Namespace, storage: Storage, data_di
 def _cmd_search_transcripts(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
     """List transcripts in DB, optionally filtered by artist-id or video-id."""
     rows = storage.list_transcripts(artist_id=args.artist_id, video_id=args.video_id)
+    if _json_print(
+        [
+            {
+                "video_id": r["video_id"],
+                "artist_id": r.get("artist_id", ""),
+                "transcript_len": r.get("transcript_len", 0),
+                "title": r.get("title", ""),
+            }
+            for r in rows
+        ],
+        args,
+    ):
+        return
     if not rows:
         print("No transcripts found.")
         _hint(
@@ -1156,28 +1188,38 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     ok_count = 0
     warn_count = 0
     fail_count = 0
+    _checks: list = []  # collected for --json
+    _is_json = getattr(args, "json_output", False)
 
-    def _ok(msg: str) -> None:
+    def _ok(msg: str, name: str = "") -> None:
         nonlocal ok_count
         ok_count += 1
-        print(f"  \u2705 OK   {msg}")
+        _checks.append({"name": name, "status": "ok", "message": msg})
+        if not _is_json:
+            print(f"  \u2705 OK   {msg}")
 
-    def _warn(msg: str) -> None:
+    def _warn(msg: str, name: str = "") -> None:
         nonlocal warn_count
         warn_count += 1
-        print(f"  \u26a0\ufe0f  WARN {msg}")
+        _checks.append({"name": name, "status": "warn", "message": msg})
+        if not _is_json:
+            print(f"  \u26a0\ufe0f  WARN {msg}")
 
-    def _fail(msg: str) -> None:
+    def _fail(msg: str, name: str = "") -> None:
         nonlocal fail_count
         fail_count += 1
-        print(f"  \u274c FAIL {msg}")
+        _checks.append({"name": name, "status": "fail", "message": msg})
+        if not _is_json:
+            print(f"  \u274c FAIL {msg}")
 
-    print("yt-artist doctor")
-    print("=" * 50)
-    print()
+    if not _is_json:
+        print("yt-artist doctor")
+        print("=" * 50)
+        print()
 
     # --- [1/5] yt-dlp installation ---
-    print("[1/5] yt-dlp installation")
+    if not _is_json:
+        print("[1/5] yt-dlp installation")
     yt_dlp_path = shutil.which("yt-dlp")
     if yt_dlp_path:
         try:
@@ -1188,30 +1230,35 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
                 timeout=10,
             )
             version_str = (ver.stdout or "").strip()
-            _ok(f"yt-dlp found: {yt_dlp_path} (version {version_str})")
+            _ok(f"yt-dlp found: {yt_dlp_path} (version {version_str})", name="yt-dlp")
         except Exception:
-            _ok(f"yt-dlp found: {yt_dlp_path} (could not get version)")
+            _ok(f"yt-dlp found: {yt_dlp_path} (could not get version)", name="yt-dlp")
     else:
-        _fail("yt-dlp not found on PATH. Install: pip install yt-dlp")
-    print()
+        _fail("yt-dlp not found on PATH. Install: pip install yt-dlp", name="yt-dlp")
+    if not _is_json:
+        print()
 
     # --- [2/5] YouTube authentication (cookies) ---
-    print("[2/5] YouTube authentication")
+    if not _is_json:
+        print("[2/5] YouTube authentication")
     auth = get_auth_config()
     if auth["cookies_browser"]:
-        _ok(f"Cookies: using browser '{auth['cookies_browser']}'")
+        _ok(f"Cookies: using browser '{auth['cookies_browser']}'", name="cookies")
     elif auth["cookies_file"]:
-        _ok(f"Cookies: using file '{auth['cookies_file']}'")
+        _ok(f"Cookies: using file '{auth['cookies_file']}'", name="cookies")
     else:
         _warn(
             "No cookies configured. Some videos (age-restricted, members-only) may fail.\n"
             "         Cookies also help avoid rate limits during bulk transcription (50+ videos).\n"
-            "         Set YT_ARTIST_COOKIES_BROWSER=chrome  (or firefox/safari)"
+            "         Set YT_ARTIST_COOKIES_BROWSER=chrome  (or firefox/safari)",
+            name="cookies",
         )
-    print()
+    if not _is_json:
+        print()
 
     # --- [3/5] PO token ---
-    print("[3/5] PO token (proof of origin)")
+    if not _is_json:
+        print("[3/5] PO token (proof of origin)")
     has_provider = False
     try:
         from importlib.metadata import distribution
@@ -1222,36 +1269,42 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
         pass
     if auth["po_token"]:
         extra = " (auto-provider also installed)" if has_provider else ""
-        _ok(f"PO token is set via YT_ARTIST_PO_TOKEN{extra}")
+        _ok(f"PO token is set via YT_ARTIST_PO_TOKEN{extra}", name="po_token")
     elif has_provider:
-        _ok("PO token provider installed (yt-dlp-get-pot-rustypipe) — tokens generated automatically")
+        _ok("PO token provider installed (yt-dlp-get-pot-rustypipe) — tokens generated automatically", name="po_token")
     else:
         _warn(
             "No PO token and no auto-provider installed. Transcribe will likely fail.\n"
             "         Fix: pip install yt-dlp-get-pot-rustypipe   (recommended, automatic)\n"
             "         Or:  export YT_ARTIST_PO_TOKEN=web.subs+<token>   (manual)\n"
-            "         Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide"
+            "         Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide",
+            name="po_token",
         )
-    print()
+    if not _is_json:
+        print()
 
     # --- [4/5] LLM endpoint ---
-    print("[4/5] LLM endpoint (for summarize)")
+    if not _is_json:
+        print("[4/5] LLM endpoint (for summarize)")
     from yt_artist.llm import check_connectivity, get_config_summary
 
     llm = get_config_summary()
     provider = "Ollama (local)" if llm["is_ollama"] else "OpenAI-compatible API"
-    print(f"       Provider: {provider}")
-    print(f"       Endpoint: {llm['base_url']}")
-    print(f"       Model:    {llm['model']}")
+    if not _is_json:
+        print(f"       Provider: {provider}")
+        print(f"       Endpoint: {llm['base_url']}")
+        print(f"       Model:    {llm['model']}")
     try:
         check_connectivity()
-        _ok(f"LLM endpoint reachable ({llm['base_url']})")
+        _ok(f"LLM endpoint reachable ({llm['base_url']})", name="llm")
     except RuntimeError as e:
-        _fail(f"LLM endpoint unreachable. {e}")
-    print()
+        _fail(f"LLM endpoint unreachable. {e}", name="llm")
+    if not _is_json:
+        print()
 
     # --- [5/5] Test subtitle fetch ---
-    print("[5/5] Test subtitle fetch (quick metadata check)")
+    if not _is_json:
+        print("[5/5] Test subtitle fetch (quick metadata check)")
     if yt_dlp_path:
         test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # "Me at the zoo" — first YT video
         try:
@@ -1260,25 +1313,31 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
             cmd = yt_dlp_cmd() + ["--skip-download", "--no-warnings", "-j", test_url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
-                _ok("yt-dlp can reach YouTube and fetch video metadata")
+                _ok("yt-dlp can reach YouTube and fetch video metadata", name="youtube")
             else:
                 stderr = (result.stderr or "").strip()
                 from yt_artist.transcriber import _classify_yt_dlp_error
 
                 err_type, err_msg = _classify_yt_dlp_error(stderr)
                 if err_type != "generic":
-                    _fail(f"YouTube access issue: {err_msg}")
+                    _fail(f"YouTube access issue: {err_msg}", name="youtube")
                 else:
-                    _fail(f"yt-dlp metadata fetch failed (exit {result.returncode}): {stderr[:200]}")
+                    _fail(f"yt-dlp metadata fetch failed (exit {result.returncode}): {stderr[:200]}", name="youtube")
         except subprocess.TimeoutExpired:
-            _warn("yt-dlp metadata fetch timed out (30s). Network may be slow.")
+            _warn("yt-dlp metadata fetch timed out (30s). Network may be slow.", name="youtube")
         except Exception as e:
-            _fail(f"yt-dlp test failed: {e}")
+            _fail(f"yt-dlp test failed: {e}", name="youtube")
     else:
-        _warn("Skipped (yt-dlp not installed)")
-    print()
+        _warn("Skipped (yt-dlp not installed)", name="youtube")
 
-    # --- Summary ---
+    # --- JSON output or human-readable summary ---
+    if _is_json:
+        import json
+
+        print(json.dumps({"checks": _checks, "ok": ok_count, "warn": warn_count, "fail": fail_count}, indent=2))
+        return
+
+    print()
     print("=" * 50)
     total = ok_count + warn_count + fail_count
     print(f"  {ok_count}/{total} checks passed", end="")
@@ -1374,8 +1433,39 @@ def _cmd_status(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     from yt_artist.jobs import list_jobs
     from yt_artist.rate_limit import get_rate_status
 
-    # Artists
     n_artists = storage.count_artists()
+    n_videos = storage.count_videos()
+    n_transcribed = storage.count_transcribed_videos()
+    n_summarized = storage.count_summarized_videos()
+    n_scored = storage.count_scored_summaries()
+    avg_q = storage.avg_quality_score()
+    n_prompts = storage.count_prompts()
+    running = list_jobs(storage, status_filter="running")
+    rate = get_rate_status(storage)
+    try:
+        db_size = storage.db_path.stat().st_size
+    except OSError:
+        db_size = None
+
+    if _json_print(
+        {
+            "artists": n_artists,
+            "videos": n_videos,
+            "transcribed": n_transcribed,
+            "summarized": n_summarized,
+            "scored": n_scored,
+            "avg_quality": avg_q,
+            "prompts": n_prompts,
+            "running_jobs": len(running),
+            "youtube_reqs_1h": rate["count_1h"],
+            "youtube_reqs_24h": rate["count_24h"],
+            "db_size_bytes": db_size,
+        },
+        args,
+    ):
+        return
+
+    # Human-readable output
     if n_artists > 0:
         artists = storage.list_artists()
         names = [a["id"] for a in artists]
@@ -1387,25 +1477,14 @@ def _cmd_status(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     else:
         print("Artists:        0")
 
-    # Videos
-    n_videos = storage.count_videos()
-    n_transcribed = storage.count_transcribed_videos()
-    n_summarized = storage.count_summarized_videos()
-    n_scored = storage.count_scored_summaries()
-    avg_q = storage.avg_quality_score()
     score_info = ""
     if n_scored > 0:
         score_info = f", {n_scored} scored"
         if avg_q is not None:
             score_info += f", avg quality: {avg_q:.2f}"
     print(f"Videos:         {n_videos} ({n_transcribed} transcribed, {n_summarized} summarized{score_info})")
-
-    # Prompts
-    n_prompts = storage.count_prompts()
     print(f"Prompts:        {n_prompts}")
 
-    # Running jobs
-    running = list_jobs(storage, status_filter="running")
     if running:
         job_descs = []
         for j in running[:3]:
@@ -1418,17 +1497,13 @@ def _cmd_status(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     else:
         print("Running jobs:   0")
 
-    # YouTube request rate
-    rate = get_rate_status(storage)
     print(f"YouTube reqs:   {rate['count_1h']} in last hour, {rate['count_24h']} in last 24h")
     if rate["warning"]:
         print(f"  \u26a0\ufe0f  {rate['warning']}")
 
-    # DB size
-    try:
-        size = storage.db_path.stat().st_size
-        print(f"DB size:        {_format_size(size)}")
-    except OSError:
+    if db_size is not None:
+        print(f"DB size:        {_format_size(db_size)}")
+    else:
         print("DB size:        unknown")
 
 
@@ -1440,6 +1515,21 @@ def _cmd_jobs(args: argparse.Namespace, storage: Storage, data_dir: Path) -> Non
 
     if action == "list":
         rows = list_jobs(storage)
+        if _json_print(
+            [
+                {
+                    "id": r["id"],
+                    "status": r["status"],
+                    "done": r.get("done", 0) or 0,
+                    "total": r.get("total", 0) or 0,
+                    "started_at": r.get("started_at", ""),
+                    "command": r.get("command", ""),
+                }
+                for r in rows
+            ],
+            args,
+        ):
+            return
         if not rows:
             print("No background jobs.")
             return
