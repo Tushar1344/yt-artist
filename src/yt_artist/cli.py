@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import threading
 import time
@@ -184,7 +183,9 @@ def _resolve_prompt_id(storage: Storage, artist_id: str | None, prompt_override:
         pid = storage.get_artist_default_prompt_id(artist_id)
         if pid:
             return pid
-    env_default = (os.environ.get("YT_ARTIST_DEFAULT_PROMPT") or "").strip()
+    from yt_artist.config import get_app_config
+
+    env_default = get_app_config().default_prompt
     if env_default and storage.get_prompt(env_default):
         return env_default
     rows = storage.list_prompts()
@@ -421,7 +422,9 @@ def main() -> None:
     args = parser.parse_args()
 
     # Configure logging: default INFO; YT_ARTIST_LOG_LEVEL overrides (e.g. DEBUG, WARNING).
-    level_name = os.environ.get("YT_ARTIST_LOG_LEVEL", "INFO").upper()
+    from yt_artist.config import get_app_config
+
+    level_name = get_app_config().log_level
     logging.basicConfig(
         format="%(levelname)s: %(message)s",
         level=getattr(logging, level_name, logging.INFO),

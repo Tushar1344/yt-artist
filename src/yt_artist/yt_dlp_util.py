@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import functools
-import os
 import re
 import shutil
 import sys
 from typing import List, Tuple
+
+from yt_artist.config import get_youtube_config
 
 # Maximum concurrency for bulk yt-dlp operations.  Kept conservative to avoid
 # triggering YouTube's adaptive rate-limiter.  Users can override via
@@ -30,16 +31,9 @@ def _resolve_base() -> Tuple[str, ...]:
 def get_inter_video_delay() -> float:
     """Return the inter-video delay (seconds) for bulk operations.
 
-    Reads YT_ARTIST_INTER_VIDEO_DELAY env var.  Falls back to
-    DEFAULT_INTER_VIDEO_DELAY (2s).
+    Reads YT_ARTIST_INTER_VIDEO_DELAY env var via config.  Falls back to 2s.
     """
-    raw = (os.environ.get("YT_ARTIST_INTER_VIDEO_DELAY") or "").strip()
-    if raw:
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            pass
-    return DEFAULT_INTER_VIDEO_DELAY
+    return get_youtube_config().inter_video_delay
 
 
 def yt_dlp_cmd() -> List[str]:
@@ -64,37 +58,33 @@ def yt_dlp_cmd() -> List[str]:
     account.  YouTube can (and does) suspend accounts used with automated tools.
     Use a throwaway / secondary account — never your primary Google account.
     """
+    cfg = get_youtube_config()
     base = list(_resolve_base())
 
     # --- Rate-limit sleep flags (always included) ---
-    sleep_requests = (os.environ.get("YT_ARTIST_SLEEP_REQUESTS") or "").strip()
-    sleep_subtitles = (os.environ.get("YT_ARTIST_SLEEP_SUBTITLES") or "").strip()
-    base += ["--sleep-requests", sleep_requests or "1"]
-    base += ["--sleep-subtitles", sleep_subtitles or "3"]
+    base += ["--sleep-requests", cfg.sleep_requests]
+    base += ["--sleep-subtitles", cfg.sleep_subtitles]
 
     # --- Cookie flags ---
-    cookies_browser = (os.environ.get("YT_ARTIST_COOKIES_BROWSER") or "").strip()
-    if cookies_browser:
-        base += ["--cookies-from-browser", cookies_browser]
-    else:
-        cookies_file = (os.environ.get("YT_ARTIST_COOKIES_FILE") or "").strip()
-        if cookies_file:
-            base += ["--cookies", cookies_file]
+    if cfg.cookies_browser:
+        base += ["--cookies-from-browser", cfg.cookies_browser]
+    elif cfg.cookies_file:
+        base += ["--cookies", cfg.cookies_file]
 
     # --- PO token (proof of origin for YouTube bot detection) ---
-    po_token = (os.environ.get("YT_ARTIST_PO_TOKEN") or "").strip()
-    if po_token:
-        base += ["--extractor-args", f"youtube:po_token={po_token}"]
+    if cfg.po_token:
+        base += ["--extractor-args", f"youtube:po_token={cfg.po_token}"]
 
     return base
 
 
 def get_auth_config() -> dict:
     """Return current YouTube authentication configuration for diagnostics."""
+    cfg = get_youtube_config()
     return {
-        "cookies_browser": (os.environ.get("YT_ARTIST_COOKIES_BROWSER") or "").strip(),
-        "cookies_file": (os.environ.get("YT_ARTIST_COOKIES_FILE") or "").strip(),
-        "po_token": bool((os.environ.get("YT_ARTIST_PO_TOKEN") or "").strip()),
+        "cookies_browser": cfg.cookies_browser,
+        "cookies_file": cfg.cookies_file,
+        "po_token": bool(cfg.po_token),
     }
 
 

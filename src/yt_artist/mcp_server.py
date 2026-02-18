@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from yt_artist.config import get_app_config
 from yt_artist.fetcher import fetch_channel as do_fetch_channel
 from yt_artist.storage import Storage
 from yt_artist.summarizer import summarize
@@ -23,15 +24,17 @@ def _get_storage() -> Storage:
     if _storage_instance is None:
         from yt_artist.paths import db_path as _db_path
 
-        data_dir = Path(os.environ.get("YT_ARTIST_DATA_DIR", os.getcwd()))
-        resolved = Path(os.environ.get("YT_ARTIST_DB", str(_db_path(data_dir))))
+        cfg = get_app_config()
+        data_dir = Path(cfg.data_dir_env or os.getcwd())
+        resolved = Path(cfg.db_env or str(_db_path(data_dir)))
         _storage_instance = Storage(resolved)
         _storage_instance.ensure_schema()
     return _storage_instance
 
 
 def _get_data_dir() -> Path:
-    return Path(os.environ.get("YT_ARTIST_DATA_DIR", os.getcwd()))
+    cfg = get_app_config()
+    return Path(cfg.data_dir_env or os.getcwd())
 
 
 def run_mcp_server() -> None:

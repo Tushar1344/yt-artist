@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import socket
 import time as _time
 from typing import Any, Optional, Tuple
 from urllib.parse import urlparse
+
+from yt_artist.config import get_llm_config
 
 try:
     from openai import OpenAI
@@ -25,25 +26,17 @@ def _is_ollama(base_url: str) -> bool:
 
 
 def _resolve_config() -> Tuple[str, str, str]:
-    """Return (base_url, api_key, default_model) from environment."""
-    base_url = (os.environ.get("OPENAI_BASE_URL") or "").strip()
-    api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    """Return (base_url, api_key, default_model) from environment.
 
-    if base_url and _is_ollama(base_url):
-        return (base_url, "ollama", OLLAMA_DEFAULT_MODEL)
-
-    if not base_url:
-        if api_key:
-            return ("https://api.openai.com/v1", api_key, "gpt-4o-mini")
-        return (OLLAMA_BASE_URL, "ollama", OLLAMA_DEFAULT_MODEL)
-
-    return (base_url, api_key or "ollama", "gpt-4o-mini")
+    Delegates to config.get_llm_config() for centralized env var parsing.
+    """
+    cfg = get_llm_config()
+    return (cfg.base_url, cfg.api_key, cfg.model)
 
 
 def get_model_name(model: Optional[str] = None) -> str:
-    """Return effective LLM model name from argument, env, or default."""
-    _, _, default_model = _resolve_config()
-    return model or os.environ.get("OPENAI_MODEL") or default_model
+    """Return effective LLM model name from argument or config default."""
+    return model or get_llm_config().model
 
 
 def check_connectivity() -> None:
@@ -79,13 +72,12 @@ def get_config_summary() -> dict:
 
     Returns a dict with keys: base_url, api_key_set (bool), model, is_ollama (bool).
     """
-    base_url, api_key, default_model = _resolve_config()
-    model = os.environ.get("OPENAI_MODEL") or default_model
+    cfg = get_llm_config()
     return {
-        "base_url": base_url,
-        "api_key_set": bool(api_key and api_key != "ollama"),
-        "model": model,
-        "is_ollama": _is_ollama(base_url),
+        "base_url": cfg.base_url,
+        "api_key_set": bool(cfg.api_key and cfg.api_key != "ollama"),
+        "model": cfg.model,
+        "is_ollama": cfg.is_ollama,
     }
 
 
@@ -148,8 +140,7 @@ def complete(
     Raises RuntimeError on persistent API errors so callers can handle gracefully.
     """
     client = get_client()
-    _, _, default_model = _resolve_config()
-    model = model or os.environ.get("OPENAI_MODEL") or default_model
+    model = model or get_llm_config().model
     backoff = _LLM_INITIAL_BACKOFF
     last_exc: Optional[Exception] = None
 

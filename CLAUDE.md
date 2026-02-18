@@ -52,6 +52,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - IN-query batching: _execute_chunked_in() splits large WHERE IN clauses into _IN_BATCH_SIZE (500) chunks to stay under SQLite's 999 param limit
 - Connection context managers: _read_conn() for reads, _write_conn() for single writes, transaction() for batch writes
 - Path centralization: paths.py has pure functions for all runtime data file paths (no mkdir)
+- Config centralization: config.py has typed frozen dataclasses for all env vars, @lru_cache accessors. Tests clear caches via conftest autouse fixture.
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 
@@ -75,10 +76,14 @@ artists, videos, transcripts, prompts, summaries, jobs, request_log, screenshots
 ```
 YT_ARTIST_DB                    # database path
 YT_ARTIST_DATA_DIR              # data directory
-YT_ARTIST_DEFAULT_PROMPT        # default prompt ID
+YT_ARTIST_DEFAULT_PROMPT        # default prompt ID (default: "default")
+YT_ARTIST_LOG_LEVEL             # logging level (default: INFO)
 YT_ARTIST_PO_TOKEN              # YouTube PO token
 YT_ARTIST_COOKIES_BROWSER       # browser for cookie extraction
 YT_ARTIST_COOKIES_FILE          # Netscape cookies file
+YT_ARTIST_INTER_VIDEO_DELAY     # seconds between bulk yt-dlp calls (default: 2.0)
+YT_ARTIST_SLEEP_REQUESTS        # yt-dlp --sleep-requests value (default: "1")
+YT_ARTIST_SLEEP_SUBTITLES       # yt-dlp --sleep-subtitles value (default: "3")
 OPENAI_API_KEY                  # triggers OpenAI instead of Ollama
 OPENAI_BASE_URL                 # LLM endpoint (default: localhost:11434/v1)
 OPENAI_MODEL                    # LLM model name
@@ -86,6 +91,8 @@ YT_ARTIST_MAX_TRANSCRIPT_CHARS  # max chars sent to LLM (default: 30000)
 YT_ARTIST_SUMMARIZE_STRATEGY    # auto|truncate|map-reduce|refine (default: auto)
 YT_ARTIST_MAP_CONCURRENCY       # max workers for map-reduce chunk parallelism (default: 3, set 1 to disable)
 ```
+
+All env vars are centralized in `config.py` via frozen dataclasses (`YouTubeConfig`, `LLMConfig`, `AppConfig`, `ConcurrencyConfig`) with `@lru_cache` accessor functions. Callers import from config.py — never read `os.environ` directly.
 
 ## Worktree / Parallel Work
 

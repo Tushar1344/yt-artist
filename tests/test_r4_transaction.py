@@ -1,6 +1,5 @@
 """Tests for R4: Storage.transaction() context manager."""
 
-
 import pytest
 
 from yt_artist.storage import Storage

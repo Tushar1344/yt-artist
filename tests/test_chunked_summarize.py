@@ -217,7 +217,7 @@ class TestParallelMapReduce:
     """Tests for parallelized map phase in _summarize_map_reduce."""
 
     @patch("yt_artist.summarizer.llm_complete")
-    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    @patch.dict("os.environ", {"YT_ARTIST_MAP_CONCURRENCY": "3"})
     def test_parallel_produces_correct_output(self, mock_llm):
         """Multiple chunks with concurrency > 1 -> parallel path, correct result."""
         call_count = [0]
@@ -236,7 +236,7 @@ class TestParallelMapReduce:
         assert result == "Final"
 
     @patch("yt_artist.summarizer.llm_complete")
-    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    @patch.dict("os.environ", {"YT_ARTIST_MAP_CONCURRENCY": "3"})
     def test_chunk_ordering_preserved(self, mock_llm):
         """Parallel results reassembled in original chunk order."""
         import time
@@ -268,7 +268,7 @@ class TestParallelMapReduce:
             assert f"Summary-{i}" in section
 
     @patch("yt_artist.summarizer.llm_complete")
-    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    @patch.dict("os.environ", {"YT_ARTIST_MAP_CONCURRENCY": "3"})
     def test_chunk_error_propagates(self, mock_llm):
         """Exception in one chunk propagates (pool shuts down)."""
         call_count = [0]
@@ -287,7 +287,7 @@ class TestParallelMapReduce:
             _summarize_map_reduce(long_text, 2000, "Summarize this")
 
     @patch("yt_artist.summarizer.llm_complete")
-    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 1)
+    @patch.dict("os.environ", {"YT_ARTIST_MAP_CONCURRENCY": "1"})
     def test_concurrency_one_uses_sequential_path(self, mock_llm):
         """_MAP_CONCURRENCY=1 -> sequential path (no ThreadPoolExecutor)."""
 
@@ -303,7 +303,7 @@ class TestParallelMapReduce:
         assert result == "Final"
 
     @patch("yt_artist.summarizer.llm_complete")
-    @patch("yt_artist.summarizer._MAP_CONCURRENCY", 3)
+    @patch.dict("os.environ", {"YT_ARTIST_MAP_CONCURRENCY": "3"})
     def test_single_chunk_skips_pool(self, mock_llm):
         """Single chunk -> max_workers=1 -> sequential path regardless of _MAP_CONCURRENCY."""
 

@@ -14,26 +14,17 @@ Chunk/reduce/refine phases use internal prompts (not user-customizable).
 from __future__ import annotations
 
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
+from yt_artist.config import get_app_config
 from yt_artist.llm import complete as llm_complete
 from yt_artist.storage import Storage
 
 log = logging.getLogger("yt_artist.summarizer")
 
-# Approximate character limit for transcripts sent to LLM.
-# ~4 chars/token → 30 000 chars ≈ 7 500 tokens, leaving headroom for system prompt + response.
-# Override with YT_ARTIST_MAX_TRANSCRIPT_CHARS env var.
-_DEFAULT_MAX_TRANSCRIPT_CHARS = 30_000
-
 # Overlap between chunks to preserve cross-boundary context.
 _CHUNK_OVERLAP = 500
-
-# Max concurrent workers for map-reduce chunk summaries.
-# Effective against OpenAI API; local Ollama processes sequentially (set to 1 to skip pool overhead).
-_MAP_CONCURRENCY = int(os.environ.get("YT_ARTIST_MAP_CONCURRENCY", "3"))
 
 # Valid strategy names.
 STRATEGIES = ("auto", "truncate", "map-reduce", "refine")
@@ -176,7 +167,9 @@ def _summarize_map_reduce(
     log.info("Map-reduce: splitting %d chars into %d chunks of ~%d chars each.", len(raw_text), n, max_chars)
 
     # Map: summarize each chunk (parallel when multiple chunks + concurrency > 1)
-    max_workers = min(n, _MAP_CONCURRENCY)
+    from yt_artist.config import get_concurrency_config
+
+    max_workers = min(n, get_concurrency_config().map_concurrency)
 
     if max_workers <= 1:
         # Single chunk or concurrency disabled — direct call, no pool overhead
@@ -273,12 +266,8 @@ def _summarize_refine(
 
 
 def _get_strategy() -> str:
-    """Return the summarization strategy from env var or default 'auto'."""
-    strategy = os.environ.get("YT_ARTIST_SUMMARIZE_STRATEGY", "auto").strip().lower()
-    if strategy not in STRATEGIES:
-        log.warning("Unknown strategy '%s', falling back to 'auto'.", strategy)
-        return "auto"
-    return strategy
+    """Return the summarization strategy from config (env var or default 'auto')."""
+    return get_app_config().summarize_strategy
 
 
 def summarize(
@@ -333,7 +322,7 @@ def summarize(
     )
 
     raw_text = transcript_row["raw_text"]
-    max_chars = int(os.environ.get("YT_ARTIST_MAX_TRANSCRIPT_CHARS", _DEFAULT_MAX_TRANSCRIPT_CHARS))
+    max_chars = get_app_config().max_transcript_chars
 
     # Resolve strategy
     strat = strategy or _get_strategy()

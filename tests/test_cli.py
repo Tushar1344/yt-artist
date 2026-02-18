@@ -100,7 +100,15 @@ class TestResolvePromptId:
             assert _resolve_prompt_id(store, "@TestArtist", None) == "env-prompt"
 
     def test_uses_first_in_db(self, tmp_path):
+        """When config default prompt doesn't exist in DB, falls back to first prompt."""
         store = _make_store(tmp_path)
+        # Remove the built-in "default" prompt so config default ("default") doesn't match
+        conn = store._conn()
+        try:
+            conn.execute("DELETE FROM prompts WHERE id = 'default'")
+            conn.commit()
+        finally:
+            conn.close()
         _seed_prompt(store, "alpha")
         _seed_prompt(store, "beta")
         with patch.dict(os.environ, {}, clear=False):
