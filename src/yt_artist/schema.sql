@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
     video_id TEXT PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
     raw_text TEXT NOT NULL,
     format TEXT,
+    quality_score REAL,
+    raw_vtt TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

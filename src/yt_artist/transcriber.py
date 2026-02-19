@@ -79,8 +79,12 @@ def extract_video_id(url_or_id: str) -> str:
     raise ValueError(f"Cannot extract video id from: {url_or_id}")
 
 
-def _find_subtitle_file(out_dir: Path) -> Optional[Tuple[str, str]]:
-    """Return (raw_text, format) from first subtitle file, preferring English-named files."""
+def _find_subtitle_file(out_dir: Path) -> Optional[Tuple[str, str, str]]:
+    """Return (plain_text, format, raw_vtt) from first subtitle file.
+
+    *raw_vtt* is the original file content before timestamp stripping.
+    Prefers English-named files.
+    """
     exts = (".vtt", ".srt", ".ass", ".json3")
     files = []
     for f in out_dir.rglob("*") if out_dir.exists() else []:
@@ -91,9 +95,9 @@ def _find_subtitle_file(out_dir: Path) -> Optional[Tuple[str, str]]:
     # Prefer filename containing .en. or .en (e.g. id.en.vtt) so we get English when multiple exist
     files.sort(key=lambda p: (0 if ".en" in p.stem.lower() else 1, p.name))
     f = files[0]
-    raw = f.read_text(encoding="utf-8", errors="replace")
+    raw_vtt = f.read_text(encoding="utf-8", errors="replace")
     fmt = f.suffix.lstrip(".").lower()
-    return (_subs_to_plain_text(raw, fmt), fmt)
+    return (_subs_to_plain_text(raw_vtt, fmt), fmt, raw_vtt)
 
 
 def _build_sub_download_cmd(video_url: str, out_tmpl: str, sub_langs: Optional[str]) -> List[str]:
@@ -249,9 +253,10 @@ def _run_yt_dlp_with_backoff(
     return ("", "", False)
 
 
-def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Storage] = None) -> Tuple[str, str]:
-    """
-    Run yt-dlp --write-auto-sub --write-sub --skip-download; return (raw_text, format).
+def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Storage] = None) -> Tuple[str, str, str]:
+    """Run yt-dlp --write-auto-sub --write-sub --skip-download.
+
+    Returns (plain_text, format, raw_vtt).
 
     Strategy (sequential, rate-limit safe):
       1. Optimistic English download (en,a.en,en-US,en-GB,en.*) — succeeds for
@@ -398,9 +403,25 @@ def transcribe(
     with tempfile.TemporaryDirectory(prefix="yt_artist_") as tmp:
         out_dir = Path(tmp) / "subs"
         out_dir.mkdir(parents=True, exist_ok=True)
-        raw_text, fmt = _run_yt_dlp_subtitles(url, out_dir, storage=storage)
+        raw_text, fmt, raw_vtt = _run_yt_dlp_subtitles(url, out_dir, storage=storage)
 
-    storage.save_transcript(video_id=video_id, raw_text=raw_text, format=fmt)
+    from yt_artist.transcript_quality import transcript_quality_score
+
+    q_score = transcript_quality_score(raw_text)
+    if q_score < 0.3:
+        log.warning(
+            "Low transcript quality for %s (score: %.2f/1.0). May be a music video or non-speech content.",
+            video_id,
+            q_score,
+        )
+
+    storage.save_transcript(
+        video_id=video_id,
+        raw_text=raw_text,
+        format=fmt,
+        quality_score=q_score,
+        raw_vtt=raw_vtt,
+    )
 
     if write_transcript_file and data_dir is not None and artist_id:
         from yt_artist.paths import transcript_file

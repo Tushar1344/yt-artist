@@ -212,7 +212,7 @@ class TestOptimisticSubtitleDownload:
             patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run),
             patch("yt_artist.transcriber._get_available_sub_langs") as mock_langs,
         ):
-            text, fmt = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
+            text, fmt, _raw = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
 
         assert text == "Hello world"
         assert fmt == "vtt"
@@ -239,7 +239,7 @@ class TestOptimisticSubtitleDownload:
             patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run),
             patch("yt_artist.transcriber._get_available_sub_langs", return_value=["es"]),
         ):
-            text, fmt = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
+            text, fmt, _raw = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
 
         assert "Hola mundo" in text
         assert call_count["n"] >= 2  # At least optimistic + one retry
@@ -268,7 +268,7 @@ class TestOptimisticSubtitleDownload:
             patch("yt_artist.transcriber.subprocess.run", side_effect=fake_run),
             patch.object(_mod._time, "sleep") as mock_sleep,
         ):
-            text, fmt = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
+            text, fmt, _raw = _run_yt_dlp_subtitles("https://youtube.com/watch?v=test123", out_dir)
 
         assert text == "Hello"
         # Backoff sleep should have been called at least once.

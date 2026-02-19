@@ -123,7 +123,7 @@ DB size:      12.4 MB
 
 ## P2: Quality of Life
 
-### 8. Transcript quality scoring (pre-summarize) `[suggestion]`
+### ~~8. Transcript quality scoring (pre-summarize)~~ `[suggestion]` ✅ Done (Session 16)
 **Why:** Auto-generated subtitles vary wildly. Music videos produce gibberish. Non-English content misidentified as English produces garbage. Summarizing bad transcripts wastes LLM calls.
 
 **Note:** Session 10 added *summary* quality scoring (`scorer.py`), which assesses how good a summary is after generation. This item is about *transcript* quality scoring — detecting bad transcripts *before* spending LLM calls on summarization. Different problem, complementary solution.
@@ -161,7 +161,7 @@ DB size:      12.4 MB
 
 ---
 
-### 22. Timestamped transcripts `[user requested]`
+### ~~22. Timestamped transcripts~~ `[user requested]` ✅ Done (Session 16)
 **Why:** Currently `_subs_to_plain_text()` strips all VTT/SRT timestamps — only deduplicated plain text is stored. Timestamps are needed for future features: jump-to-moment links, most-replayed segment correlation, screenshot-at-timestamp, and chapter-aware summarization.
 
 **Scope:**
@@ -247,7 +247,7 @@ DB size:      12.4 MB
 
 ---
 
-### 11. Tech debt: `--_bg-worker` re-execution pattern `[suggestion]`
+### ~~11. Tech debt: `--_bg-worker` re-execution pattern~~ `[suggestion]` ✅ Done (Session 16)
 **Why:** Re-executing the CLI as a subprocess is fragile. If the user's environment changes (PATH, venv activation) between parent and child, the child may fail silently. Works now but should be flagged.
 
 **Scope:**

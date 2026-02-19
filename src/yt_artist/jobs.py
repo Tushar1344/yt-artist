@@ -229,6 +229,66 @@ def _mark_job_stale(storage: Storage, job_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Launch background job
 # ---------------------------------------------------------------------------
+# ARCHITECTURE NOTE — re-execution pattern
+#
+# Background jobs are implemented by re-executing the CLI as a detached
+# subprocess: `python -m yt_artist.cli --_bg-worker <job_id> <original_args>`.
+#
+# Known limitations:
+# 1. Environment dependency: if PATH, virtualenv, or Python version changes
+#    between parent and child, the child may fail to import or find yt-dlp.
+# 2. Silent failures: if the child crashes during startup (before signal
+#    handlers are registered), the parent has already exited.  Failure is
+#    detected later when list_jobs() sees a dead PID and marks it stale.
+# 3. No terminal: stdout/stderr are redirected to a log file; the child
+#    has no TTY (start_new_session=True).
+#
+# Mitigations:
+# - sys.executable ensures the same Python interpreter is used.
+# - Health check: parent waits ~2 s and verifies the child wrote a startup
+#   marker to the log file.  If not, it warns (but does not abort).
+# - Stale detection: list_jobs() checks PID liveness and auto-marks dead.
+# ---------------------------------------------------------------------------
+
+_STARTUP_MARKER = "__BG_STARTED__"
+_STARTUP_TIMEOUT = 2.0  # seconds to wait for child startup
+
+
+def _verify_child_started(
+    proc: subprocess.Popen,
+    log_path: Path,
+    job_id: str,
+) -> None:
+    """Wait briefly and verify the child wrote the startup marker.
+
+    Prints a warning to stderr if verification fails.  Does NOT abort —
+    the child may simply be slow to start.
+    """
+    time.sleep(_STARTUP_TIMEOUT)
+
+    # Check 1: is the child PID still alive?
+    if not _is_pid_alive(proc.pid):
+        sys.stderr.write(
+            f"  Warning: background job {job_id[:8]} (PID {proc.pid}) "
+            f"died within {_STARTUP_TIMEOUT:.0f}s of launch.\n"
+            f"  Check the log: {log_path}\n"
+            f"  Run: yt-artist jobs\n"
+        )
+        return
+
+    # Check 2: did the child write the startup marker to the log?
+    if log_path.exists():
+        try:
+            content = log_path.read_text(encoding="utf-8", errors="replace")
+            if _STARTUP_MARKER in content:
+                return  # All good
+        except OSError:
+            pass
+
+    # Child alive but no marker yet — may be slow to start.
+    sys.stderr.write(
+        f"  Warning: background job {job_id[:8]} may not have fully started yet.\n  Check progress: yt-artist jobs\n"
+    )
 
 
 def launch_background(
@@ -270,6 +330,10 @@ def launch_background(
     )
 
     _update_job_pid(storage, job_id, proc.pid)
+
+    # Health check: wait briefly, verify child started.
+    _verify_child_started(proc, log_path, job_id)
+
     return job_id
 
 

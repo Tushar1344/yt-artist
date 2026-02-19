@@ -342,6 +342,15 @@ def main() -> None:
     )
     p_sum.add_argument("--score", action="store_true", default=None, help="Force quality scoring on summaries")
     p_sum.add_argument("--no-score", action="store_true", default=False, help="Skip quality scoring")
+    p_sum.add_argument(
+        "--skip-low-quality",
+        type=float,
+        nargs="?",
+        const=0.3,
+        default=None,
+        metavar="THRESHOLD",
+        help="Skip transcripts below quality threshold (default: 0.3 if flag given without value)",
+    )
     p_sum.set_defaults(func=_cmd_summarize)
 
     # add-prompt: define a prompt template
@@ -363,6 +372,12 @@ def main() -> None:
     p_search = subparsers.add_parser("search-transcripts", help="Search/list transcripts in the DB")
     p_search.add_argument("--artist-id", default=None, help="Filter by artist (channel) id")
     p_search.add_argument("--video-id", default=None, help="Show only this video id")
+    p_search.add_argument(
+        "--with-timestamps",
+        action="store_true",
+        default=False,
+        help="Include parsed timestamp segments in --json output",
+    )
     p_search.set_defaults(func=_cmd_search_transcripts)
 
     # set-default-prompt: per-artist default for summarize
@@ -503,6 +518,13 @@ def main() -> None:
             sys.exit(0)
 
         _signal.signal(_signal.SIGTERM, _bg_sigterm_handler)
+
+        # Startup marker: confirm child process initialized successfully.
+        # Parent checks for this marker to verify the child started.
+        import os as _os
+
+        print(f"__BG_STARTED__ pid={_os.getpid()} job={bg_worker_id}")
+        sys.stdout.flush()
 
     # First-run hint: suggest doctor + quickstart if DB is empty.
     if not _quiet and args.command not in ("quickstart", "doctor", "jobs", "status"):
@@ -715,6 +737,28 @@ def _cmd_summarize(args: argparse.Namespace, storage: Storage, data_dir: Path) -
         already_summarized = storage.video_ids_with_summary(all_ids, prompt_id)
         to_summarize = [v for v in videos if v["id"] not in already_summarized]
         skipped = len(videos) - len(to_summarize)
+
+        # Filter out low-quality transcripts when --skip-low-quality is used.
+        skip_threshold = getattr(args, "skip_low_quality", None)
+        if skip_threshold is not None and to_summarize:
+            _filtered = []
+            _skipped_lq = 0
+            for v in to_summarize:
+                t = storage.get_transcript(v["id"])
+                q = t.get("quality_score") if t else None
+                if q is not None and q < skip_threshold:
+                    _skipped_lq += 1
+                else:
+                    _filtered.append(v)
+            if _skipped_lq:
+                log.info(
+                    "Skipping %d low-quality transcripts (below %.2f threshold).",
+                    _skipped_lq,
+                    skip_threshold,
+                )
+                if not _quiet:
+                    print(f"Skipping {_skipped_lq} low-quality transcripts (quality < {skip_threshold:.2f}).")
+            to_summarize = _filtered
 
         if not to_summarize:
             print(f"All {len(videos)} videos already summarized with prompt '{prompt_id}'.")
@@ -1097,18 +1141,28 @@ def _cmd_build_artist_prompt(args: argparse.Namespace, storage: Storage, data_di
 def _cmd_search_transcripts(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
     """List transcripts in DB, optionally filtered by artist-id or video-id."""
     rows = storage.list_transcripts(artist_id=args.artist_id, video_id=args.video_id)
-    if _json_print(
-        [
-            {
-                "video_id": r["video_id"],
-                "artist_id": r.get("artist_id", ""),
-                "transcript_len": r.get("transcript_len", 0),
-                "title": r.get("title", ""),
-            }
-            for r in rows
-        ],
-        args,
-    ):
+    json_rows = [
+        {
+            "video_id": r["video_id"],
+            "artist_id": r.get("artist_id", ""),
+            "transcript_len": r.get("transcript_len", 0),
+            "quality_score": r.get("quality_score"),
+            "title": r.get("title", ""),
+        }
+        for r in rows
+    ]
+    if getattr(args, "with_timestamps", False) and getattr(args, "json_output", False):
+        from yt_artist.vtt_parser import parse_timestamped_segments
+
+        for item in json_rows:
+            t = storage.get_transcript(item["video_id"])
+            raw_vtt = t.get("raw_vtt") if t else None
+            fmt = t.get("format", "vtt") if t else "vtt"
+            if raw_vtt:
+                item["segments"] = parse_timestamped_segments(raw_vtt, fmt)
+            else:
+                item["segments"] = None
+    if _json_print(json_rows, args):
         return
     if not rows:
         print("No transcripts found.")
@@ -1242,9 +1296,9 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
         print("=" * 50)
         print()
 
-    # --- [1/5] yt-dlp installation ---
+    # --- [1/6] yt-dlp installation ---
     if not _is_json:
-        print("[1/5] yt-dlp installation")
+        print("[1/6] yt-dlp installation")
     yt_dlp_path = shutil.which("yt-dlp")
     if yt_dlp_path:
         try:
@@ -1263,9 +1317,9 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     if not _is_json:
         print()
 
-    # --- [2/5] YouTube authentication (cookies) ---
+    # --- [2/6] YouTube authentication (cookies) ---
     if not _is_json:
-        print("[2/5] YouTube authentication")
+        print("[2/6] YouTube authentication")
     auth = get_auth_config()
     if auth["cookies_browser"]:
         _ok(f"Cookies: using browser '{auth['cookies_browser']}'", name="cookies")
@@ -1281,9 +1335,9 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     if not _is_json:
         print()
 
-    # --- [3/5] PO token ---
+    # --- [3/6] PO token ---
     if not _is_json:
-        print("[3/5] PO token (proof of origin)")
+        print("[3/6] PO token (proof of origin)")
     has_provider = False
     try:
         from importlib.metadata import distribution
@@ -1308,9 +1362,9 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     if not _is_json:
         print()
 
-    # --- [4/5] LLM endpoint ---
+    # --- [4/6] LLM endpoint ---
     if not _is_json:
-        print("[4/5] LLM endpoint (for summarize)")
+        print("[4/6] LLM endpoint (for summarize)")
     from yt_artist.llm import check_connectivity, get_config_summary
 
     llm = get_config_summary()
@@ -1327,9 +1381,9 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
     if not _is_json:
         print()
 
-    # --- [5/5] Test subtitle fetch ---
+    # --- [5/6] Test subtitle fetch ---
     if not _is_json:
-        print("[5/5] Test subtitle fetch (quick metadata check)")
+        print("[5/6] Test subtitle fetch (quick metadata check)")
     if yt_dlp_path:
         test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # "Me at the zoo" — first YT video
         try:
@@ -1354,6 +1408,26 @@ def _cmd_doctor(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
             _fail(f"yt-dlp test failed: {e}", name="youtube")
     else:
         _warn("Skipped (yt-dlp not installed)", name="youtube")
+
+    # --- [6/6] Transcript quality backfill ---
+    if not _is_json:
+        print()
+        print("[6/6] Transcript quality scores")
+    conn = storage._conn()
+    try:
+        cur = conn.execute("SELECT video_id, raw_text FROM transcripts WHERE quality_score IS NULL")
+        unscored = cur.fetchall()
+    finally:
+        conn.close()
+    if unscored:
+        from yt_artist.transcript_quality import transcript_quality_score
+
+        for row in unscored:
+            q = transcript_quality_score(row["raw_text"])
+            storage.update_transcript_quality_score(row["video_id"], q)
+        _ok(f"Backfilled quality scores for {len(unscored)} transcripts", name="transcript_quality")
+    else:
+        _ok("All transcripts have quality scores", name="transcript_quality")
 
     # --- JSON output or human-readable summary ---
     if _is_json:

@@ -45,10 +45,12 @@ class VideoRow(TypedDict):
     fetched_at: str
 
 
-class TranscriptRow(TypedDict):
+class TranscriptRow(TypedDict, total=False):
     video_id: str
     raw_text: str
     format: str
+    quality_score: Optional[float]
+    raw_vtt: Optional[str]
     created_at: str
 
 
@@ -84,6 +86,7 @@ class TranscriptListRow(TypedDict, total=False):
     format: str
     created_at: str
     transcript_len: int
+    quality_score: Optional[float]
     artist_id: str
     title: str
 
@@ -177,6 +180,10 @@ class Storage:
             self._migrate_verification_score_column(conn)
             conn.commit()
             self._migrate_provenance_columns(conn)
+            conn.commit()
+            self._migrate_transcript_quality_column(conn)
+            conn.commit()
+            self._migrate_transcript_raw_vtt_column(conn)
             conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
@@ -276,6 +283,22 @@ class Storage:
             conn.execute("ALTER TABLE summaries ADD COLUMN model TEXT")
         if "strategy" not in names:
             conn.execute("ALTER TABLE summaries ADD COLUMN strategy TEXT")
+
+    def _migrate_transcript_quality_column(self, conn: sqlite3.Connection) -> None:
+        """Add quality_score column to transcripts if missing."""
+        cur = conn.execute("PRAGMA table_info(transcripts)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "quality_score" not in names:
+            conn.execute("ALTER TABLE transcripts ADD COLUMN quality_score REAL")
+
+    def _migrate_transcript_raw_vtt_column(self, conn: sqlite3.Connection) -> None:
+        """Add raw_vtt column to transcripts if missing."""
+        cur = conn.execute("PRAGMA table_info(transcripts)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "raw_vtt" not in names:
+            conn.execute("ALTER TABLE transcripts ADD COLUMN raw_vtt TEXT")
 
     # ------ Artists ------
 
@@ -397,19 +420,23 @@ class Storage:
         video_id: str,
         raw_text: str,
         format: Optional[str] = None,
+        quality_score: Optional[float] = None,
+        raw_vtt: Optional[str] = None,
     ) -> None:
         conn = self._conn()
         try:
             conn.execute(
                 """
-                INSERT INTO transcripts (video_id, raw_text, format)
-                VALUES (?, ?, ?)
+                INSERT INTO transcripts (video_id, raw_text, format, quality_score, raw_vtt)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(video_id) DO UPDATE SET
                     raw_text = excluded.raw_text,
                     format = excluded.format,
+                    quality_score = excluded.quality_score,
+                    raw_vtt = excluded.raw_vtt,
                     created_at = datetime('now')
                 """,
-                (video_id, raw_text, format or ""),
+                (video_id, raw_text, format or "", quality_score, raw_vtt),
             )
             conn.commit()
         finally:
@@ -434,6 +461,7 @@ class Storage:
             sql = """
                 SELECT t.video_id, t.format, t.created_at,
                        length(t.raw_text) AS transcript_len,
+                       t.quality_score,
                        v.artist_id, v.title
                 FROM transcripts t
                 LEFT JOIN videos v ON v.id = t.video_id
@@ -449,6 +477,18 @@ class Storage:
             sql += " ORDER BY t.created_at DESC"
             cur = conn.execute(sql, params)
             return cur.fetchall()  # type: ignore[return-value]
+        finally:
+            conn.close()
+
+    def update_transcript_quality_score(self, video_id: str, quality_score: float) -> None:
+        """Update quality_score on an existing transcript row (for backfill)."""
+        conn = self._conn()
+        try:
+            conn.execute(
+                "UPDATE transcripts SET quality_score = ? WHERE video_id = ?",
+                (quality_score, video_id),
+            )
+            conn.commit()
         finally:
             conn.close()
 

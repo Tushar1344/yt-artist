@@ -75,7 +75,11 @@ def test_transcribe_saves_to_db(store):
         title="V1",
     )
 
-    with patch("yt_artist.transcriber._run_yt_dlp_subtitles", return_value=("Mocked transcript text.", "vtt")):
+    mock_vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nMocked transcript text.\n"
+    with patch(
+        "yt_artist.transcriber._run_yt_dlp_subtitles",
+        return_value=("Mocked transcript text.", "vtt", mock_vtt),
+    ):
         video_id = transcribe(
             "https://www.youtube.com/watch?v=vid1test01",
             store,
@@ -86,6 +90,8 @@ def test_transcribe_saves_to_db(store):
     assert row is not None
     assert "Mocked transcript text" in row["raw_text"]
     assert row["format"] == "vtt"
+    assert row.get("quality_score") is not None
+    assert row.get("raw_vtt") == mock_vtt
 
 
 def test_transcribe_writes_optional_file(store, tmp_path):
@@ -102,7 +108,10 @@ def test_transcribe_writes_optional_file(store, tmp_path):
         title="V2",
     )
 
-    with patch("yt_artist.transcriber._run_yt_dlp_subtitles", return_value=("Optional file text.", "vtt")):
+    with patch(
+        "yt_artist.transcriber._run_yt_dlp_subtitles",
+        return_value=("Optional file text.", "vtt", "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nOptional file text.\n"),
+    ):
         transcribe(
             "vid2test02",
             store,
