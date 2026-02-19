@@ -1,5 +1,6 @@
 """Tests for scorer.py — heuristic + LLM quality scoring, parallel scoring CLI."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from yt_artist.scorer import (
@@ -674,7 +675,10 @@ class TestParallelScoring:
             dry_run=False,
             concurrency=2,
         )
-        _cmd_score(args, store, data_dir=None)
+        from yt_artist.cli import AppContext
+
+        ctx = AppContext(args=args, storage=store, data_dir=Path("."))
+        _cmd_score(ctx)
 
         captured = capsys.readouterr()
         assert "Scored 3 summaries" in captured.out
@@ -713,7 +717,10 @@ class TestParallelScoring:
             dry_run=False,
             concurrency=2,
         )
-        _cmd_score(args, store, data_dir=None)
+        from yt_artist.cli import AppContext
+
+        ctx = AppContext(args=args, storage=store, data_dir=Path("."))
+        _cmd_score(ctx)
 
         captured = capsys.readouterr()
         # 2 scored, 1 error
@@ -736,7 +743,10 @@ class TestParallelScoring:
             dry_run=True,
             concurrency=1,
         )
-        _cmd_score(args, store, data_dir=None)
+        from yt_artist.cli import AppContext
+
+        ctx = AppContext(args=args, storage=store, data_dir=Path("."))
+        _cmd_score(ctx)
 
         captured = capsys.readouterr()
         assert "Would score 2 summaries" in captured.out
@@ -764,7 +774,10 @@ class TestParallelScoring:
             dry_run=False,
             concurrency=1,
         )
-        _cmd_score(args, store, data_dir=None)
+        from yt_artist.cli import AppContext
+
+        ctx = AppContext(args=args, storage=store, data_dir=Path("."))
+        _cmd_score(ctx)
 
         captured = capsys.readouterr()
         assert "Scored 2 summaries" in captured.out

@@ -177,20 +177,19 @@ DB size:      12.4 MB
 
 ---
 
-### 23. cli.py structural refactor: AppContext + _cmd_summarize decomposition `[suggestion]`
+### ~~23. cli.py structural refactor: AppContext + _cmd_summarize decomposition~~ `[suggestion]` ✅ Done (Session 18)
 **Why:** cli.py is ~1,600 lines with 14 `_cmd_*` functions. Manageable now but `_cmd_summarize` alone is 297 lines mixing 4 concerns (single-video, bulk-sequential, pipeline, scoring setup). Three module-level globals (`_quiet`, `_bg_job_id`, `_bg_storage`) couple helpers to implicit state.
 
-**Note:** Config centralization (config.py) is done (Session 15), but `transcriber.py` line 323 still reads `os.environ.get("YT_ARTIST_PO_TOKEN")` directly — should delegate to `get_youtube_config().po_token`. Fix as part of AppContext work or standalone cleanup.
-
-**Recommended approach (2 steps):**
-1. **AppContext dataclass** — replace the 3 globals + `(args, storage, data_dir)` triple with a single context object. Prerequisite for any further splitting. Improves testability immediately.
-2. **Break up `_cmd_summarize`** — extract `_summarize_single()`, `_summarize_bulk_sequential()`, `_summarize_pipeline()` as private helpers. Same file, just cleaner.
+**What was done:**
+1. **AppContext dataclass** — replaced 3 module globals + `(args, storage, data_dir)` triple with a single `AppContext` context object threaded through all 15 `_cmd_*` handlers. Deprecated globals kept for backward compatibility.
+2. **Decomposed `_cmd_summarize`** — extracted `_summarize_single()`, `_summarize_bulk_sequential()`, `_summarize_pipeline()` as private helpers. `_cmd_summarize` is now ~130 lines of setup + dispatch.
+3. **Helper functions updated** — `_hint()` accepts explicit `quiet` param, `_run_bulk()` accepts explicit `job_id`/`job_storage` params instead of reading globals.
 
 **Deferred (only when needed):**
-- `commands/` package split — only justified when adding a second entrypoint (API server, TUI) or hitting 2500+ lines. mcp_server.py already imports domain modules directly (zero coupling to cli.py).
-- `use_cases/` layer — domain logic already lives in fetcher/transcriber/summarizer/scorer/pipeline. Adding a third layer between cli and domain has little benefit today.
+- `commands/` package split — only justified when adding a second entrypoint (API server, TUI) or hitting 2500+ lines.
+- `use_cases/` layer — domain logic already lives in fetcher/transcriber/summarizer/scorer/pipeline.
 
-**Effort:** Medium. AppContext is mechanical but touches all 14 commands + helpers. _cmd_summarize decomposition is contained. Test disruption is moderate (many tests patch sys.argv + call main()).
+**Note:** Config centralization (config.py) is done (Session 15), but `transcriber.py` line 323 still reads `os.environ.get("YT_ARTIST_PO_TOKEN")` directly — should delegate to `get_youtube_config().po_token`. Fix as standalone cleanup.
 
 ---
 

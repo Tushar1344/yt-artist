@@ -714,3 +714,112 @@ class TestSetAbout:
         data = json.loads(out)
         assert data["artist_id"] == "@TestArtist"
         assert data["about_len"] == len("Test about")
+
+
+# ---------------------------------------------------------------------------
+# AppContext
+# ---------------------------------------------------------------------------
+
+
+class TestAppContext:
+    """Verify AppContext creation and field propagation through main()."""
+
+    def test_app_context_created_with_correct_fields(self, tmp_path, capfd):
+        """main() creates AppContext with args, storage, data_dir."""
+        import yt_artist.cli as cli_mod
+
+        captured_ctx = {}
+
+        def spy_func(ctx):
+            captured_ctx["ctx"] = ctx
+            # Run the real quickstart? No, just capture ctx.
+            print("spy ran")
+
+        db = tmp_path / "test.db"
+        argv = ["yt-artist", "--db", str(db), "list-prompts"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch("yt_artist.cli._cmd_list_prompts", side_effect=spy_func),
+        ):
+            try:
+                main()
+            except SystemExit:
+                pass
+
+        ctx = captured_ctx.get("ctx")
+        assert ctx is not None
+        assert isinstance(ctx, cli_mod.AppContext)
+        assert ctx.storage is not None
+        assert ctx.data_dir is not None
+        assert ctx.args is not None
+        assert ctx.quiet is False
+        assert ctx.bg_job_id is None
+        assert ctx.bg_storage is None
+
+    def test_app_context_quiet_flag(self, tmp_path, capfd):
+        """--quiet flag propagates to ctx.quiet."""
+        captured_ctx = {}
+
+        def spy_func(ctx):
+            captured_ctx["ctx"] = ctx
+
+        db = tmp_path / "test.db"
+        argv = ["yt-artist", "--db", str(db), "--quiet", "list-prompts"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch("yt_artist.cli._cmd_list_prompts", side_effect=spy_func),
+        ):
+            try:
+                main()
+            except SystemExit:
+                pass
+
+        ctx = captured_ctx.get("ctx")
+        assert ctx is not None
+        assert ctx.quiet is True
+
+    def test_app_context_bg_worker(self, tmp_path, capfd):
+        """--_bg-worker flag sets ctx.bg_job_id and ctx.bg_storage."""
+        from yt_artist.storage import Storage as S
+
+        db = tmp_path / "test.db"
+        store = S(db)
+        store.ensure_schema()
+        # Seed a job so bg-worker validation passes
+
+        conn = store._conn()
+        try:
+            conn.execute(
+                "INSERT INTO jobs (id, command, pid, log_file, status, started_at) "
+                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                ("bgctx123", "list-prompts", os.getpid(), "/tmp/test.log", "running"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        captured_ctx = {}
+
+        def spy_func(ctx):
+            captured_ctx["ctx"] = ctx
+
+        argv = ["yt-artist", "--db", str(db), "--_bg-worker", "bgctx123", "list-prompts"]
+        with (
+            patch.object(sys, "argv", argv),
+            patch("yt_artist.cli._cmd_list_prompts", side_effect=spy_func),
+        ):
+            try:
+                main()
+            except SystemExit:
+                pass
+
+        ctx = captured_ctx.get("ctx")
+        assert ctx is not None
+        assert ctx.bg_job_id == "bgctx123"
+        assert ctx.bg_storage is not None
+
+        # Clean up deprecated globals
+        import yt_artist.cli as cli_mod
+
+        cli_mod._bg_job_id = None
+        cli_mod._bg_storage = None

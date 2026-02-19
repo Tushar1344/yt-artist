@@ -334,7 +334,7 @@ class TestBGFlagLaunch:
         mock_launch.assert_called_once()
 
     def test_bg_worker_flag_sets_globals(self, tmp_path, capfd):
-        """When --_bg-worker is passed, _bg_job_id should be set."""
+        """When --_bg-worker is passed, ctx.bg_job_id and deprecated globals should be set."""
         import yt_artist.cli as cli_mod
 
         db = tmp_path / "test.db"
@@ -342,9 +342,13 @@ class TestBGFlagLaunch:
         store.ensure_schema()
         _seed_job(store, job_id="testworker123", pid=os.getpid())
 
-        # Mock the actual command to avoid needing real data
-        def fake_func(args, storage, data_dir):
-            # Verify the globals are set
+        # Mock the actual command to avoid needing real data.
+        # main() now dispatches args.func(ctx) where ctx is an AppContext.
+        def fake_func(ctx):
+            # Verify AppContext fields are set
+            assert ctx.bg_job_id == "testworker123"
+            assert ctx.bg_storage is not None
+            # Verify deprecated module globals are also set
             assert cli_mod._bg_job_id == "testworker123"
             assert cli_mod._bg_storage is not None
 

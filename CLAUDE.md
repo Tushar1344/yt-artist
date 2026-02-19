@@ -39,7 +39,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 
 - Storage layer uses dict row factory — all DB rows are dicts not tuples
 - TypedDict row types in storage.py (ArtistRow, VideoRow, etc.)
-- CLI: argparse subcommands, each command is _cmd_* function taking (args, storage, data_dir)
+- CLI: argparse subcommands, each command is _cmd_* function taking AppContext (args, storage, data_dir, quiet, bg_job_id, bg_storage). AppContext dataclass replaces module globals; threaded through all handlers.
 - Upsert pattern everywhere: INSERT ON CONFLICT DO UPDATE
 - Background jobs: re-exec as subprocess with --_bg-worker flag
 - Concurrency via ThreadPoolExecutor, capped at ConcurrencyConfig.max_concurrency=3 (bulk transcribe/summarize/score)
