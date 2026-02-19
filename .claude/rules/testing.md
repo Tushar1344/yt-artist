@@ -14,3 +14,4 @@ globs:
 - Prefer specific assertions: `assert x["id"] == "foo"` not `assert x is not None`
 - Test both happy path and error cases
 - Never hit real YouTube or LLM APIs
+- DB seeding in tests: use `with store.transaction() as conn:` for raw SQL, never `store._conn()`

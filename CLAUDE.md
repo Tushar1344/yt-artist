@@ -50,7 +50,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - BAML prompts: scoring/verification only (.baml files → baml_client/ → prompts.py adapter). Summarization uses DB-stored templates rendered via _fill_template() in summarizer.py.
 - Hallucination guardrails: entity verification, faithfulness tracking, --verify claim check in scorer.py
 - IN-query batching: _execute_chunked_in() splits large WHERE IN clauses into _IN_BATCH_SIZE (500) chunks to stay under SQLite's 999 param limit
-- Connection context managers: _read_conn() for reads, _write_conn() for single writes, transaction() for batch writes
+- Connection context managers: _read_conn() for reads, _write_conn() for single writes, transaction() for batch writes. _conn() is internal to storage.py — external callers use Storage methods or transaction().
 - Path centralization: paths.py has pure functions for all runtime data file paths (no mkdir)
 - Config centralization: config.py has typed frozen dataclasses for all env vars, @lru_cache accessors. Tests clear caches via conftest autouse fixture.
 - JSON output: `--json` global flag on CLI, `_json_print()` helper. Supported by: list-prompts, search-transcripts, status, jobs list, doctor, set-about, export, history

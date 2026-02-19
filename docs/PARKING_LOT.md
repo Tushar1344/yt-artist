@@ -244,15 +244,45 @@ Hybrid approach: moved SQL into 11 new Storage methods (`create_job`, `update_jo
 
 ## P3: Product Vision
 
-### 12. Performance: hot-path language migration `[user requested]`
-**Why:** For very large channels (5000+ videos), Python may become the bottleneck for subtitle parsing, VTT deduplication, or batch DB operations.
+### ~~12. Performance: hot-path language migration~~ `[user requested]` ❌ Won't do (Session 21)
+**Why:** Profiling (Session 21) proved Python is not the bottleneck — I/O is. Every CPU-bound function runs for single-digit milliseconds, then waits seconds-to-minutes for yt-dlp subprocess calls, LLM API responses, or SQLite I/O. The heaviest pure-Python function (`_key_term_coverage()` in scorer.py) takes ~15ms, followed by a 5-30s LLM call. Python's `re`, `hashlib`, and `sqlite3` are already C under the hood. Rewriting any module in C/Rust would save tens of milliseconds in a pipeline that takes minutes per video.
+
+**Superseded by:** Items 28, 29, 30 — Python-level algorithmic fixes that deliver real gains.
+
+---
+
+### 28. Fix N+1 query pattern in exporter.py `[profiling]`
+**Why:** `export_json()` and `export_csv()` issue 2 DB queries per video (transcript + summaries). For a 2000-video channel, that's ~4000 SQLite round-trips. This is the actual export performance bottleneck.
 
 **Scope:**
-- Profile the actual bottlenecks (likely: yt-dlp subprocess overhead, not Python itself)
-- Candidates for Rust/C extension: VTT parser, transcript deduplication, large batch INSERT
-- Consider: is the bottleneck actually I/O (network, disk) rather than CPU?
+- Batch-load transcripts and summaries via JOINs instead of per-video queries
+- Chunk by artist or batch of video IDs
+- Keep streaming/memory-efficient design (don't load all transcripts at once)
 
-**Effort:** Large. Only worth doing after profiling proves Python is the bottleneck.
+**Effort:** Small-medium. SQL refactor, no new dependencies.
+
+---
+
+### 29. Single-pass transcript quality scoring `[profiling]`
+**Why:** `transcript_quality.py` runs 5 separate passes over the transcript text (`split()`, `splitlines()`, char scan, etc.). Could be collapsed into 1-2 passes. Currently ~1-5ms/video — negligible, but cleaner code.
+
+**Scope:**
+- Combine `_word_count_score`, `_repetition_ratio_score`, `_avg_word_length_score`, `_punctuation_density_score`, `_line_uniqueness_score` into a single-pass computation
+- One `splitlines()`, one word iteration, one char scan
+
+**Effort:** Small. Pure refactor.
+
+---
+
+### 30. Staleness hash caching `[profiling]`
+**Why:** `get_stale_summary_counts()` recomputes SHA-256 hashes of prompt templates and transcript text on every call. For 1000 summaries, this takes ~50-200ms. Could cache or compute incrementally.
+
+**Scope:**
+- Store precomputed hashes at summarization time (already done for new summaries — issue is legacy summaries with NULL hashes)
+- Backfill NULL hashes via a one-time migration or `doctor` command
+- Staleness check becomes a pure SQL comparison instead of Python loop + recompute
+
+**Effort:** Small-medium. Migration + storage method update.
 
 ---
 
