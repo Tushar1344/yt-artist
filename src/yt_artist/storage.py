@@ -589,6 +589,21 @@ class Storage:
         finally:
             conn.close()
 
+    def list_summaries(self, artist_id: Optional[str] = None) -> List[SummaryRow]:
+        """Return all summaries, optionally filtered to an artist's videos."""
+        with self._read_conn() as conn:
+            if artist_id:
+                cur = conn.execute(
+                    "SELECT s.* FROM summaries s "
+                    "JOIN videos v ON v.id = s.video_id "
+                    "WHERE v.artist_id = ? "
+                    "ORDER BY s.created_at DESC",
+                    (artist_id,),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM summaries ORDER BY created_at DESC")
+            return cur.fetchall()  # type: ignore[return-value]
+
     @staticmethod
     def _execute_chunked_in(
         conn: sqlite3.Connection,

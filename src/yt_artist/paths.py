@@ -47,3 +47,8 @@ def jobs_dir(data_dir: Path) -> Path:
 def job_log_file(data_dir: Path, job_id: str) -> Path:
     """Return path for a specific job log file."""
     return jobs_dir(data_dir) / f"{job_id}.log"
+
+
+def export_dir(data_dir: Path) -> Path:
+    """Return base directory for export output."""
+    return data_dir / "data" / "exports"

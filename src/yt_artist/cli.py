@@ -460,6 +460,50 @@ def main() -> None:
     )
     p_status.set_defaults(func=_cmd_status)
 
+    # export: data portability backup
+    p_export = subparsers.add_parser(
+        "export",
+        help="Export data to portable JSON or CSV files for backup",
+    )
+    p_export.add_argument(
+        "--artist-id",
+        default=None,
+        help="Export only this artist (default: all artists)",
+    )
+    p_export.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        dest="export_format",
+        help="Output format (default: json)",
+    )
+    p_export.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output directory (default: data/exports/export_TIMESTAMP/)",
+    )
+    p_export.add_argument(
+        "--include-vtt",
+        action="store_true",
+        default=False,
+        help="Include raw VTT subtitle data (roughly doubles transcript size)",
+    )
+    p_export.add_argument(
+        "--chunk-size",
+        type=int,
+        default=50,
+        help="Videos per JSON chunk file (default: 50, CSV ignores this)",
+    )
+    p_export.add_argument(
+        "--zip",
+        action="store_true",
+        default=False,
+        dest="compress",
+        help="Compress each chunk/CSV into individual .zip files (email-friendly)",
+    )
+    p_export.set_defaults(func=_cmd_export)
+
     args = parser.parse_args()
 
     # Configure logging: default INFO; YT_ARTIST_LOG_LEVEL overrides (e.g. DEBUG, WARNING).
@@ -1604,6 +1648,50 @@ def _cmd_status(args: argparse.Namespace, storage: Storage, data_dir: Path) -> N
         print(f"DB size:        {_format_size(db_size)}")
     else:
         print("DB size:        unknown")
+
+
+def _cmd_export(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:
+    """Export data to portable JSON or CSV files for backup."""
+    from yt_artist.exporter import export_csv, export_json
+    from yt_artist.paths import export_dir
+
+    artist_id = (getattr(args, "artist_id", None) or "").strip() or None
+    if artist_id and not storage.get_artist(artist_id):
+        raise SystemExit(f"Artist {artist_id} not in DB. Run: yt-artist status")
+
+    output = args.output_dir or export_dir(data_dir)
+
+    if args.export_format == "json":
+        manifest = export_json(
+            storage,
+            output,
+            artist_id=artist_id,
+            chunk_size=args.chunk_size,
+            include_vtt=args.include_vtt,
+            compress=args.compress,
+        )
+    else:
+        manifest = export_csv(
+            storage,
+            output,
+            artist_id=artist_id,
+            include_vtt=args.include_vtt,
+            compress=args.compress,
+        )
+
+    if _json_print(manifest, args):
+        return
+
+    print(f"Exported to: {manifest['output_dir']}")
+    print(f"Files: {manifest['file_count']}")
+    total_size = sum(manifest.get("file_sizes", {}).values())
+    print(f"Total size: {_format_size(total_size)}")
+    for artist_info in manifest.get("artists", []):
+        print(
+            f"  {artist_info['id']}: {artist_info['videos']} videos, "
+            f"{artist_info.get('transcripts', 0)} transcripts, "
+            f"{artist_info.get('summaries', 0)} summaries"
+        )
 
 
 def _cmd_jobs(args: argparse.Namespace, storage: Storage, data_dir: Path) -> None:

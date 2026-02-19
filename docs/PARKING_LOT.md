@@ -69,13 +69,16 @@ DB size:      12.4 MB
 
 ---
 
-### 5. Export/backup `[suggestion]`
+### ~~5. Export/backup~~ `[suggestion]` ✅ Done (Session 17)
 **Why:** Users who invest hours transcribing 500 videos want to know their data isn't locked in a SQLite file they can't read. This is a trust issue that blocks adoption.
 
 **Scope:**
-- `yt-artist export --artist-id @X --format json` → all videos + transcripts + summaries
-- `yt-artist export --artist-id @X --format csv` → flat table
-- Export to stdout (pipeable) or `--output file.json`
+- `yt-artist export --artist-id @X --format json` → chunked JSON (per-artist, 50 videos/file, self-contained)
+- `yt-artist export --artist-id @X --format csv` → flat tables (artists, videos, transcripts, summaries, prompts)
+- `--zip` flag compresses each chunk/CSV into individual `.zip` files (stdlib zipfile, zero deps)
+- `--include-vtt` includes raw VTT timestamps; `--chunk-size N` configurable
+- Manifest.json with export metadata, file sizes, and artist stats
+- Memory-efficient: iterates per-video, never loads all transcripts at once
 
 **Effort:** Medium. Need to define the export schema and handle large datasets.
 

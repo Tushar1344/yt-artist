@@ -12,6 +12,7 @@ A portable command-line utility for Mac that fetches YouTube channel video lists
 - **Background jobs:** Push long-running bulk operations to the background with `--bg`. Monitor progress with `yt-artist jobs`. Attach to a running job's log, stop jobs, or clean up old ones.
 - **Per-artist default prompt:** Set a default prompt per artist so you can run `summarize` without passing `--prompt` every time.
 - **Build artist prompt:** Optionally search the web for the artist and build an "about" text (and a prompt) so summaries are artist-aware.
+- **Export/backup:** Export all your data to portable JSON or CSV files. Chunked per-artist (50 videos per file, email-friendly). Compress with `--zip`.
 - **Guided onboarding:** After every command, yt-artist suggests what to do next. Run `yt-artist quickstart` for a guided walkthrough. Use `--quiet`/`-q` to suppress hints.
 - **Rate-limit safe:** Conservative delays between YouTube requests. Configurable concurrency, sleep intervals, and cookie support for restricted content.
 - **Portable:** Single install script for Mac; everything lives under `~/.local/yt-artist` and `~/.local/bin`.
@@ -126,6 +127,7 @@ export DB=./yt.db
 | `jobs stop <job_id>` | Send SIGTERM to stop a running background job. |
 | `jobs clean` | Remove finished jobs older than 7 days and their log files. |
 | `score` [--artist-id @X] [--prompt ID] [--skip-llm] [--verify] | Score summaries for quality (heuristic + LLM self-check). `--verify` adds claim verification. Parallel execution with `--concurrency`. Supports `--dry-run`. |
+| `export` [--artist-id @X] [--format json\|csv] [--zip] | Export data to portable JSON (chunked) or CSV files for backup. |
 | `status` | Overview: artists, videos, transcripts, summaries (with scoring stats), jobs, DB size. |
 | `quickstart` | Print a guided 3-step walkthrough using @TED as an example. |
 | `doctor` | Check your setup: yt-dlp installation, YouTube authentication, PO token, LLM endpoint, test metadata fetch. |
@@ -133,6 +135,8 @@ export DB=./yt.db
 **Global options:** `--db PATH`, `--data-dir PATH`, `--bg` (run in background), `-q`/`--quiet` (suppress hints), `--dry-run` (preview without executing), `--concurrency N` (parallel workers, 1-3)
 
 **Summarize options:** `--strategy {auto,truncate,map-reduce,refine}`, `--score`/`--no-score`
+
+**Export options:** `--format json|csv` (default: json), `--output-dir DIR`, `--include-vtt` (include raw VTT timestamps), `--chunk-size N` (videos per JSON chunk, default 50), `--zip` (compress each file)
 
 **Score options:** `--skip-llm` (heuristic-only, zero LLM calls), `--verify` (claim verification, 1 extra LLM call per summary). Runs in parallel when `--concurrency` > 1.
 
@@ -162,6 +166,7 @@ export DB=./yt.db
 - **Transcript files (optional):** With `transcribe --write-file`, under `<data-dir>/data/artists/<artist_id>/transcripts/<video_id>.txt`.
 - **Summaries:** In the SQLite DB only. Existing DBs may need a one-time migration (new columns on `artists`); the tool adds them automatically when you run any command.
 - **Job logs:** `<data-dir>/data/jobs/<job_id>.log` — log files for background jobs. Cleaned up with `yt-artist jobs clean`.
+- **Exports:** `<data-dir>/data/exports/export_<timestamp>/` — exported JSON/CSV files and manifest. Each export is a timestamped directory.
 
 ---
 

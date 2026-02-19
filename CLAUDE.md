@@ -14,7 +14,7 @@ Python 3.9+ CLI: fetch YouTube channel videos, transcribe via yt-dlp, summarize 
 
 ## Layout
 
-- src/yt_artist/ — package source (cli.py is entrypoint, storage.py is DB layer)
+- src/yt_artist/ — package source (cli.py is entrypoint, storage.py is DB layer, exporter.py is export/backup)
 - baml_src/ — BAML prompt definitions (.baml files, git-versioned)
 - tests/ — pytest tests (conftest.py has db_path and store fixtures)
 - scripts/ — install, wrapper, and monitoring scripts (monitor.sh = live dashboard)
@@ -53,7 +53,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Connection context managers: _read_conn() for reads, _write_conn() for single writes, transaction() for batch writes
 - Path centralization: paths.py has pure functions for all runtime data file paths (no mkdir)
 - Config centralization: config.py has typed frozen dataclasses for all env vars, @lru_cache accessors. Tests clear caches via conftest autouse fixture.
-- JSON output: `--json` global flag on CLI, `_json_print()` helper. Supported by: list-prompts, search-transcripts, status, jobs list, doctor, set-about
+- JSON output: `--json` global flag on CLI, `_json_print()` helper. Supported by: list-prompts, search-transcripts, status, jobs list, doctor, set-about, export
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 

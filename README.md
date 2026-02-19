@@ -6,6 +6,7 @@ Fetch YouTube channel video URLs, transcribe videos, and generate AI-powered sum
 - **Transcribe:** One video (by URL or id) or bulk per artist (with optional auto-fetch of urllist). Parallel execution with configurable concurrency.
 - **Summarize:** One video or bulk per artist; uses per-artist default prompt or `--prompt`. Auto-creates artist/video/transcript when missing. Parallel execution. Long transcripts handled via map-reduce or refine strategies (`--strategy`).
 - **Quality scoring:** Automated heuristic + LLM self-check scoring with hallucination guardrails. Named entity verification catches fabricated names. Faithfulness tracked separately. Optional `--verify` for deep claim verification. Standalone `yt-artist score` command.
+- **Export/backup:** Portable JSON (chunked per-artist, self-contained) or flat CSV export. `--zip` for email-friendly compressed files. Never locks your data in SQLite.
 - **Background jobs:** Push long-running bulk operations to the background with `--bg`. Monitor with `yt-artist jobs`, attach to logs, stop running jobs.
 - **Per-artist default prompt** and optional **build-artist-prompt** (search + "about" text).
 - **Guided onboarding:** Next-step hints after every command, `quickstart` walkthrough, `--quiet` for scripting.
@@ -92,6 +93,10 @@ yt-artist jobs                    # list all jobs with progress
 yt-artist jobs attach <job_id>    # tail the log (Ctrl-C to detach)
 yt-artist jobs stop <job_id>      # stop a running job
 yt-artist jobs clean              # remove old finished jobs
+
+# Export data for backup (JSON or CSV)
+yt-artist export --artist-id @channel
+yt-artist export --format csv --zip             # compressed CSV tables
 
 # Optional: build "about" from web search and set as default prompt
 yt-artist build-artist-prompt --artist-id @channel --save-as-default

@@ -30,6 +30,7 @@ graph TD
         PIPELINE["pipeline.py<br/>3-stage producer-consumer"]
         RATE["rate_limit.py<br/>request_log, thresholds"]
         ARTIST["artist_prompt.py<br/>DuckDuckGo + LLM about"]
+        EXPORT["exporter.py<br/>JSON/CSV chunked export"]
         MCP["mcp_server.py<br/>FastMCP wrapper"]
         LLM["llm.py<br/>OpenAI / Ollama<br/>cached client, retry"]
     end
@@ -39,6 +40,7 @@ graph TD
     CLI --> SUMM
     CLI --> SCORE
     CLI --> JOBS
+    CLI --> EXPORT
     CLI --> YTDLP
 
     SCORE --> PROMPTS
@@ -50,6 +52,7 @@ graph TD
     SUMM --> STORAGE
     SCORE --> STORAGE
     JOBS --> STORAGE
+    EXPORT --> STORAGE
     STORAGE --> SCHEMA
 
     SUMM --> LLM
