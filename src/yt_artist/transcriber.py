@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import subprocess
 import tempfile
@@ -12,6 +11,7 @@ import time as _time
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
+from yt_artist.config import get_youtube_config
 from yt_artist.storage import Storage
 from yt_artist.yt_dlp_util import yt_dlp_cmd as _yt_dlp_cmd
 
@@ -325,7 +325,7 @@ def _run_yt_dlp_subtitles(video_url: str, out_dir: Path, storage: Optional[Stora
         "Try another video or check if the video has region restrictions."
     )
     # Check PO token status and provider plugin — give the most relevant hint.
-    has_manual_token = bool((os.environ.get("YT_ARTIST_PO_TOKEN") or "").strip())
+    has_manual_token = bool(get_youtube_config().po_token)
     has_provider = False
     try:
         from importlib.metadata import distribution

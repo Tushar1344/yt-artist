@@ -204,16 +204,12 @@ class TestDefaultPrompt:
         """If user already has prompts, ensure_schema should NOT add 'default'."""
         store = _make_store(tmp_path)
         # Remove default and add a custom prompt
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute("DELETE FROM prompts")
             conn.execute(
                 "INSERT INTO prompts (id, name, template, artist_component, video_component, intent_component, audience_component) "
                 "VALUES ('custom', 'Custom', 'My template', '', '', '', '')"
             )
-            conn.commit()
-        finally:
-            conn.close()
         # Re-run ensure_schema (simulates app restart)
         store.ensure_schema()
         # 'default' should NOT exist since user already has prompts

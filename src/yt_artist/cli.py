@@ -1667,12 +1667,7 @@ def _cmd_doctor(ctx: AppContext) -> None:
     if not _is_json:
         print()
         print("[6/6] Transcript quality scores")
-    conn = storage._conn()
-    try:
-        cur = conn.execute("SELECT video_id, raw_text FROM transcripts WHERE quality_score IS NULL")
-        unscored = cur.fetchall()
-    finally:
-        conn.close()
+    unscored = storage.get_unscored_transcripts()
     if unscored:
         from yt_artist.transcript_quality import transcript_quality_score
 

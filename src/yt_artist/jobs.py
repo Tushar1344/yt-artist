@@ -123,44 +123,17 @@ def maybe_suggest_background(
 
 def _create_job_record(storage: Storage, job_id: str, command: str, log_path: Path) -> None:
     """Insert a new job row with status='running'."""
-    conn = storage._conn()
-    try:
-        conn.execute(
-            "INSERT INTO jobs (id, command, status, pid, log_file) VALUES (?, ?, 'running', -1, ?)",
-            (job_id, command, str(log_path)),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    storage.create_job(job_id=job_id, command=command, log_file=str(log_path))
 
 
 def _update_job_pid(storage: Storage, job_id: str, pid: int) -> None:
     """Set the actual PID after subprocess launch."""
-    conn = storage._conn()
-    try:
-        conn.execute("UPDATE jobs SET pid = ? WHERE id = ?", (pid, job_id))
-        conn.commit()
-    finally:
-        conn.close()
+    storage.update_job_pid(job_id, pid)
 
 
 def get_job(storage: Storage, job_id: str) -> Optional[Dict[str, Any]]:
     """Get a job by ID (supports prefix match for short IDs)."""
-    conn = storage._conn()
-    try:
-        # Exact match first
-        cur = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
-        row = cur.fetchone()
-        if row:
-            return row
-        # Prefix match
-        cur = conn.execute(
-            "SELECT * FROM jobs WHERE id LIKE ? ORDER BY started_at DESC LIMIT 1",
-            (job_id + "%",),
-        )
-        return cur.fetchone()
-    finally:
-        conn.close()
+    return storage.get_job(job_id)
 
 
 def update_job_progress(
@@ -172,26 +145,7 @@ def update_job_progress(
     total: int = None,
 ) -> None:
     """Update progress fields on a job row."""
-    parts: list[str] = []
-    params: list[Any] = []
-    if total is not None:
-        parts.append("total = ?")
-        params.append(total)
-    if done is not None:
-        parts.append("done = ?")
-        params.append(done)
-    if errors is not None:
-        parts.append("errors = ?")
-        params.append(errors)
-    if not parts:
-        return
-    params.append(job_id)
-    conn = storage._conn()
-    try:
-        conn.execute(f"UPDATE jobs SET {', '.join(parts)} WHERE id = ?", params)
-        conn.commit()
-    finally:
-        conn.close()
+    storage.update_job_progress(job_id, done=done, errors=errors, total=total)
 
 
 def finalize_job(
@@ -201,29 +155,12 @@ def finalize_job(
     error_message: str = None,
 ) -> None:
     """Mark a job as finished (completed, failed, or stopped)."""
-    conn = storage._conn()
-    try:
-        conn.execute(
-            "UPDATE jobs SET status = ?, finished_at = datetime('now'), error_message = ? WHERE id = ?",
-            (status, error_message, job_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    storage.finalize_job(job_id, status=status, error_message=error_message)
 
 
 def _mark_job_stale(storage: Storage, job_id: str) -> None:
     """Mark a running job whose process died as failed."""
-    conn = storage._conn()
-    try:
-        conn.execute(
-            "UPDATE jobs SET status = 'failed', finished_at = datetime('now'), "
-            "error_message = 'Process died unexpectedly' WHERE id = ? AND status = 'running'",
-            (job_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    storage.mark_job_stale(job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -344,18 +281,7 @@ def launch_background(
 
 def list_jobs(storage: Storage, status_filter: str = None) -> List[Dict[str, Any]]:
     """Return recent jobs, optionally filtered by status.  Auto-detects stale PIDs."""
-    conn = storage._conn()
-    try:
-        if status_filter:
-            cur = conn.execute(
-                "SELECT * FROM jobs WHERE status = ? ORDER BY started_at DESC LIMIT 20",
-                (status_filter,),
-            )
-        else:
-            cur = conn.execute("SELECT * FROM jobs ORDER BY started_at DESC LIMIT 20")
-        rows = cur.fetchall()
-    finally:
-        conn.close()
+    rows = storage.list_recent_jobs(status_filter=status_filter)
 
     # Clean up stale jobs (pid no longer alive but status is 'running')
     for row in rows:
@@ -481,23 +407,9 @@ def retry_job(job: Dict[str, Any], storage: Storage, data_dir: Path) -> str:
 
 def cleanup_old_jobs(storage: Storage, max_age_days: int = 7) -> int:
     """Remove finished jobs (+ log files) older than max_age_days.  Returns count removed."""
-    conn = storage._conn()
-    try:
-        cur = conn.execute(
-            "SELECT id, log_file FROM jobs WHERE status != 'running' AND finished_at < datetime('now', ?)",
-            (f"-{max_age_days} days",),
-        )
-        rows = cur.fetchall()
-        for row in rows:
-            log_path = Path(row["log_file"])
-            if log_path.exists():
-                log_path.unlink()
-        if rows:
-            conn.execute(
-                "DELETE FROM jobs WHERE status != 'running' AND finished_at < datetime('now', ?)",
-                (f"-{max_age_days} days",),
-            )
-            conn.commit()
-        return len(rows)
-    finally:
-        conn.close()
+    rows = storage.delete_old_jobs(max_age_days=max_age_days)
+    for row in rows:
+        log_path = Path(row["log_file"])
+        if log_path.exists():
+            log_path.unlink()
+    return len(rows)

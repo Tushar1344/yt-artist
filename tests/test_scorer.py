@@ -352,8 +352,7 @@ class TestStorageScoring:
 
     def test_schema_migration(self, store):
         """Score columns exist after schema migration."""
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             cur = conn.execute("PRAGMA table_info(summaries)")
             rows = cur.fetchall()
             names = {r["name"] for r in rows}
@@ -361,8 +360,6 @@ class TestStorageScoring:
             assert "heuristic_score" in names
             assert "llm_score" in names
             assert "faithfulness_score" in names
-        finally:
-            conn.close()
 
     def test_faithfulness_score_stored(self, store):
         """faithfulness_score is persisted via update_summary_scores."""
@@ -621,14 +618,11 @@ class TestVerificationScoreStored:
 
     def test_verification_score_column_exists(self, store):
         """verification_score column exists in schema."""
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             cur = conn.execute("PRAGMA table_info(summaries)")
             rows = cur.fetchall()
             names = {r["name"] for r in rows}
             assert "verification_score" in names
-        finally:
-            conn.close()
 
 
 # ---------------------------------------------------------------------------

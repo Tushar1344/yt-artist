@@ -53,16 +53,12 @@ def _seed_job(
     errors: int = 0,
 ) -> None:
     """Insert a job row directly for testing."""
-    conn = store._conn()
-    try:
+    with store.transaction() as conn:
         conn.execute(
             "INSERT INTO jobs (id, command, status, pid, log_file, total, done, errors) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (job_id, command, status, pid, log_file, total, done, errors),
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -249,16 +245,12 @@ class TestJobDB:
         # Insert a finished job with finished_at in the past
         log_path = tmp_path / "old.log"
         log_path.write_text("old log content")
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute(
                 "INSERT INTO jobs (id, command, status, pid, log_file, finished_at) "
                 "VALUES ('old_job_1234', 'test cmd', 'completed', 1, ?, datetime('now', '-10 days'))",
                 (str(log_path),),
             )
-            conn.commit()
-        finally:
-            conn.close()
         removed = cleanup_old_jobs(store, max_age_days=7)
         assert removed == 1
         assert not log_path.exists()
@@ -307,13 +299,10 @@ class TestProgressCounterDB:
         # Finalize should be a no-op
         pc.finalize()
         # No jobs should exist
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             cur = conn.execute("SELECT COUNT(*) AS cnt FROM jobs")
             row = cur.fetchone()
             assert (row["cnt"] if isinstance(row, dict) else row[0]) == 0
-        finally:
-            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -466,16 +455,12 @@ class TestJobsCommand:
         store.ensure_schema()
         log_file = tmp_path / "old.log"
         log_file.write_text("old content")
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute(
                 "INSERT INTO jobs (id, command, status, pid, log_file, finished_at) "
                 "VALUES ('old_job_1234', 'test cmd', 'completed', 1, ?, datetime('now', '-10 days'))",
                 (str(log_file),),
             )
-            conn.commit()
-        finally:
-            conn.close()
         code = _run_cli("jobs", "clean", db_path=db)
         assert code == 0
         captured = capfd.readouterr()
@@ -491,20 +476,14 @@ class TestJobsMigration:
     def test_jobs_table_created_on_fresh_db(self, tmp_path):
         """ensure_schema() should create the jobs table."""
         store = _make_store(tmp_path)
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
             assert cur.fetchone() is not None
-        finally:
-            conn.close()
 
     def test_jobs_table_migration_idempotent(self, tmp_path):
         """Calling ensure_schema() twice should not error."""
         store = _make_store(tmp_path)
         store.ensure_schema()  # Second call
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'")
             assert cur.fetchone() is not None
-        finally:
-            conn.close()

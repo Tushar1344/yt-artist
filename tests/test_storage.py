@@ -590,15 +590,9 @@ class TestHashPersistence:
 
     def test_migrate_hash_columns_idempotent(self, store):
         """Running migration twice does not error."""
-
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             store._migrate_hash_columns(conn)
-            conn.commit()
             store._migrate_hash_columns(conn)
-            conn.commit()
-        finally:
-            conn.close()
         # Still works after double-migration
         _setup_hash_data(store)
         store.upsert_summary(
@@ -891,11 +885,6 @@ class TestWorkLedger:
 
     def test_migrate_work_ledger_idempotent(self, store):
         """Running migration twice does not error."""
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             store._migrate_work_ledger_table(conn)
-            conn.commit()
             store._migrate_work_ledger_table(conn)
-            conn.commit()
-        finally:
-            conn.close()

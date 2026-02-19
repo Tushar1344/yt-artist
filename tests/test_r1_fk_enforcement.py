@@ -38,12 +38,8 @@ def test_fk_cascade_deletes_videos(store):
     )
 
     # Delete artist directly via raw SQL
-    conn = store._conn()
-    try:
+    with store.transaction() as conn:
         conn.execute("DELETE FROM artists WHERE id = ?", ("UC_cascade",))
-        conn.commit()
-    finally:
-        conn.close()
 
     # Videos should be gone (cascade)
     assert store.get_video("cv1") is None
@@ -67,11 +63,7 @@ def test_fk_cascade_deletes_transcripts(store):
     store.save_transcript(video_id="ctv1", raw_text="Hello world.", format="vtt")
 
     # Delete video directly
-    conn = store._conn()
-    try:
+    with store.transaction() as conn:
         conn.execute("DELETE FROM videos WHERE id = ?", ("ctv1",))
-        conn.commit()
-    finally:
-        conn.close()
 
     assert store.get_transcript("ctv1") is None

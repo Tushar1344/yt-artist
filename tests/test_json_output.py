@@ -197,16 +197,12 @@ class TestJobsListJson:
         import uuid
 
         jid = str(uuid.uuid4())
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute(
                 "INSERT INTO jobs (id, status, command, total, done, started_at, pid, log_file)"
                 " VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?)",
                 (jid, "running", "test-cmd", 10, 3, 99999, "/tmp/test.log"),
             )
-            conn.commit()
-        finally:
-            conn.close()
         code, out, _ = _run_cli("jobs", db_path=db, json_output=True)
         data = json.loads(out)
         assert len(data) >= 1

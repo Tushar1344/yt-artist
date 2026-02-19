@@ -193,15 +193,11 @@ class TestStatusCommand:
         store = Storage(db)
         store.ensure_schema()
         # Seed a running job
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute(
                 "INSERT INTO jobs (id, command, status, pid, log_file, total, done) "
                 "VALUES ('abcd1234abcd', 'transcribe --artist-id @X', 'running', 99999, '/tmp/j.log', 100, 45)"
             )
-            conn.commit()
-        finally:
-            conn.close()
         code = _run_cli("status", db_path=db)
         assert code == 0
         out = capfd.readouterr().out

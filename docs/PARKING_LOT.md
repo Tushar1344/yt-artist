@@ -189,7 +189,7 @@ DB size:      12.4 MB
 - `commands/` package split — only justified when adding a second entrypoint (API server, TUI) or hitting 2500+ lines.
 - `use_cases/` layer — domain logic already lives in fetcher/transcriber/summarizer/scorer/pipeline.
 
-**Note:** Config centralization (config.py) is done (Session 15), but `transcriber.py` line 323 still reads `os.environ.get("YT_ARTIST_PO_TOKEN")` directly — should delegate to `get_youtube_config().po_token`. Fix as standalone cleanup.
+**Note:** ~~Config centralization (config.py) is done (Session 15), but `transcriber.py` line 323 still reads `os.environ.get("YT_ARTIST_PO_TOKEN")` directly — should delegate to `get_youtube_config().po_token`. Fix as standalone cleanup.~~ Fixed in Session 20.
 
 ---
 
@@ -198,18 +198,8 @@ Append-only `work_ledger` table recording every transcribe/summarize/score/verif
 
 ---
 
-### 25. Stop external `storage._conn()` calls `[architecture review]`
-**Why:** `_conn()` is a private method but `jobs.py` (8 calls) and `rate_limit.py` (2 calls) use it directly, bypassing context managers (`_read_conn()`, `_write_conn()`, `transaction()`). Tests have 26 direct calls. This couples callers to connection lifecycle details and makes it harder to add connection pooling or tracing later.
-
-**Current state (partial):** Context managers exist and most storage.py methods use them internally. The problem is external callers.
-
-**Scope:**
-- `jobs.py`: expose proper public methods on Storage (or a JobsStore helper) for each operation
-- `rate_limit.py`: expose `log_request()` and `get_request_counts()` on Storage
-- Tests: migrate from `store._conn()` to public methods or use `transaction()` context manager
-- Consider: make `_conn()` raise DeprecationWarning when called from outside storage.py
-
-**Effort:** Medium. Mechanical but touches many files. Jobs.py is the bulk of the work.
+### ~~25. Stop external `storage._conn()` calls~~ `[architecture review]` ✅ Done (Session 20)
+Hybrid approach: moved SQL into 11 new Storage methods (`create_job`, `update_job_pid`, `get_job`, `update_job_progress`, `finalize_job`, `mark_job_stale`, `list_recent_jobs`, `delete_old_jobs`, `log_rate_request`, `count_rate_requests`, `get_unscored_transcripts`) for production code; replaced 21 test `_conn()` calls with `transaction()` context manager. Added `JobRow` TypedDict. Zero `_conn()` calls remain outside `storage.py`.
 
 ---
 

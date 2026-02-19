@@ -109,6 +109,22 @@ class WorkLedgerRow(TypedDict, total=False):
     error_message: Optional[str]
 
 
+class JobRow(TypedDict, total=False):
+    """Row from the jobs table."""
+
+    id: str
+    command: str
+    status: str
+    pid: int
+    log_file: str
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    total: int
+    done: int
+    errors: int
+    error_message: Optional[str]
+
+
 # ---------------------------------------------------------------------------
 # Storage class
 # ---------------------------------------------------------------------------
@@ -1036,6 +1052,136 @@ class Storage:
             result[key] = row["cnt"]
             result["total"] += row["cnt"]
         return result
+
+    # ------ Jobs ------
+
+    def create_job(self, *, job_id: str, command: str, log_file: str) -> None:
+        """Insert a new job row with status='running'."""
+        with self._write_conn() as conn:
+            conn.execute(
+                "INSERT INTO jobs (id, command, status, pid, log_file) VALUES (?, ?, 'running', -1, ?)",
+                (job_id, command, log_file),
+            )
+
+    def update_job_pid(self, job_id: str, pid: int) -> None:
+        """Set the actual PID after subprocess launch."""
+        with self._write_conn() as conn:
+            conn.execute("UPDATE jobs SET pid = ? WHERE id = ?", (pid, job_id))
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get a job by ID (supports prefix match for short IDs)."""
+        with self._read_conn() as conn:
+            cur = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+            row = cur.fetchone()
+            if row:
+                return row
+            cur = conn.execute(
+                "SELECT * FROM jobs WHERE id LIKE ? ORDER BY started_at DESC LIMIT 1",
+                (job_id + "%",),
+            )
+            return cur.fetchone()
+
+    def update_job_progress(
+        self,
+        job_id: str,
+        *,
+        done: Optional[int] = None,
+        errors: Optional[int] = None,
+        total: Optional[int] = None,
+    ) -> None:
+        """Update progress fields on a job row."""
+        parts: List[str] = []
+        params: List[Any] = []
+        if total is not None:
+            parts.append("total = ?")
+            params.append(total)
+        if done is not None:
+            parts.append("done = ?")
+            params.append(done)
+        if errors is not None:
+            parts.append("errors = ?")
+            params.append(errors)
+        if not parts:
+            return
+        params.append(job_id)
+        with self._write_conn() as conn:
+            conn.execute(f"UPDATE jobs SET {', '.join(parts)} WHERE id = ?", params)
+
+    def finalize_job(self, job_id: str, status: str = "completed", error_message: Optional[str] = None) -> None:
+        """Mark a job as finished (completed, failed, or stopped)."""
+        with self._write_conn() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = ?, finished_at = datetime('now'), error_message = ? WHERE id = ?",
+                (status, error_message, job_id),
+            )
+
+    def mark_job_stale(self, job_id: str) -> None:
+        """Mark a running job whose process died as failed."""
+        with self._write_conn() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', finished_at = datetime('now'), "
+                "error_message = 'Process died unexpectedly' WHERE id = ? AND status = 'running'",
+                (job_id,),
+            )
+
+    def list_recent_jobs(self, status_filter: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent jobs, optionally filtered by status."""
+        with self._read_conn() as conn:
+            if status_filter:
+                cur = conn.execute(
+                    "SELECT * FROM jobs WHERE status = ? ORDER BY started_at DESC LIMIT ?",
+                    (status_filter, limit),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM jobs ORDER BY started_at DESC LIMIT ?", (limit,))
+            return cur.fetchall()
+
+    def delete_old_jobs(self, max_age_days: int = 7) -> List[Dict[str, Any]]:
+        """Delete finished jobs older than *max_age_days*.  Returns deleted rows."""
+        with self.transaction() as conn:
+            cur = conn.execute(
+                "SELECT id, log_file FROM jobs WHERE status != 'running' AND finished_at < datetime('now', ?)",
+                (f"-{max_age_days} days",),
+            )
+            rows = cur.fetchall()
+            if rows:
+                conn.execute(
+                    "DELETE FROM jobs WHERE status != 'running' AND finished_at < datetime('now', ?)",
+                    (f"-{max_age_days} days",),
+                )
+        return rows
+
+    # ------ Rate limiting ------
+
+    def log_rate_request(self, request_type: str, cleanup_age_hours: int = 24) -> None:
+        """Log a yt-dlp request and clean up old entries."""
+        with self._write_conn() as conn:
+            conn.execute(
+                "INSERT INTO request_log (request_type) VALUES (?)",
+                (request_type,),
+            )
+            conn.execute(
+                "DELETE FROM request_log WHERE timestamp < datetime('now', ?)",
+                (f"-{cleanup_age_hours} hours",),
+            )
+
+    def count_rate_requests(self, hours: int = 1) -> int:
+        """Count yt-dlp requests in the last *hours* hours."""
+        with self._read_conn() as conn:
+            cur = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM request_log WHERE timestamp > datetime('now', ?)",
+                (f"-{hours} hours",),
+            )
+            row = cur.fetchone()
+        return row["cnt"] if isinstance(row, dict) else row[0]
+
+    # ------ Doctor helpers ------
+
+    def get_unscored_transcripts(self) -> List[Dict[str, Any]]:
+        """Return transcripts where quality_score is NULL."""
+        with self._read_conn() as conn:
+            cur = conn.execute("SELECT video_id, raw_text FROM transcripts WHERE quality_score IS NULL")
+            return cur.fetchall()
 
     # ------ Helpers ------
 

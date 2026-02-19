@@ -23,34 +23,12 @@ def log_request(storage: Storage, request_type: str) -> None:
 
     Called after each successful yt-dlp subprocess call.
     """
-    conn = storage._conn()
-    try:
-        conn.execute(
-            "INSERT INTO request_log (request_type) VALUES (?)",
-            (request_type,),
-        )
-        # Piggyback cleanup: delete old rows to prevent unbounded growth
-        conn.execute(
-            "DELETE FROM request_log WHERE timestamp < datetime('now', ?)",
-            (f"-{_CLEANUP_AGE_HOURS} hours",),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    storage.log_rate_request(request_type, cleanup_age_hours=_CLEANUP_AGE_HOURS)
 
 
 def count_requests(storage: Storage, hours: int = 1) -> int:
     """Count yt-dlp requests in the last *hours* hours."""
-    conn = storage._conn()
-    try:
-        cur = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM request_log WHERE timestamp > datetime('now', ?)",
-            (f"-{hours} hours",),
-        )
-        row = cur.fetchone()
-        return row["cnt"] if isinstance(row, dict) else row[0]
-    finally:
-        conn.close()
+    return storage.count_rate_requests(hours)
 
 
 def get_rate_status(storage: Storage) -> Dict[str, Any]:

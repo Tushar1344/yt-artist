@@ -103,12 +103,8 @@ class TestResolvePromptId:
         """When config default prompt doesn't exist in DB, falls back to first prompt."""
         store = _make_store(tmp_path)
         # Remove the built-in "default" prompt so config default ("default") doesn't match
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute("DELETE FROM prompts WHERE id = 'default'")
-            conn.commit()
-        finally:
-            conn.close()
         _seed_prompt(store, "alpha")
         _seed_prompt(store, "beta")
         with patch.dict(os.environ, {}, clear=False):
@@ -787,16 +783,12 @@ class TestAppContext:
         store.ensure_schema()
         # Seed a job so bg-worker validation passes
 
-        conn = store._conn()
-        try:
+        with store.transaction() as conn:
             conn.execute(
                 "INSERT INTO jobs (id, command, pid, log_file, status, started_at) "
                 "VALUES (?, ?, ?, ?, ?, datetime('now'))",
                 ("bgctx123", "list-prompts", os.getpid(), "/tmp/test.log", "running"),
             )
-            conn.commit()
-        finally:
-            conn.close()
 
         captured_ctx = {}
 
