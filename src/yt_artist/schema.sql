@@ -124,3 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_work_ledger_video_id ON work_ledger(video_id);
 CREATE INDEX IF NOT EXISTS idx_work_ledger_operation ON work_ledger(operation);
 CREATE INDEX IF NOT EXISTS idx_work_ledger_started_at ON work_ledger(started_at);
+
+-- NOTE: FTS5 virtual table (transcripts_fts) and sync triggers are created
+-- by _migrate_fts5_transcripts() in storage.py, not here. This is because
+-- the migration needs to detect fresh creation vs existing table for index rebuild.

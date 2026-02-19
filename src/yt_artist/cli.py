@@ -419,6 +419,18 @@ def main() -> None:
     p_search.add_argument("--artist-id", default=None, help="Filter by artist (channel) id")
     p_search.add_argument("--video-id", default=None, help="Show only this video id")
     p_search.add_argument(
+        "--query",
+        "-q",
+        default=None,
+        help='Full-text search query (FTS5 syntax: words, "phrases", prefix*, OR)',
+    )
+    p_search.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max results to return (default: 20 for search, unlimited for list)",
+    )
+    p_search.add_argument(
         "--with-timestamps",
         action="store_true",
         default=False,
@@ -1388,9 +1400,21 @@ def _cmd_build_artist_prompt(ctx: AppContext) -> None:
 
 
 def _cmd_search_transcripts(ctx: AppContext) -> None:
-    """List transcripts in DB, optionally filtered by artist-id or video-id."""
+    """List or search transcripts in DB. With --query, full-text search with ranked results."""
+    query = getattr(ctx.args, "query", None)
+    if query:
+        _search_transcripts_fts(ctx)
+    else:
+        _list_transcripts(ctx)
+
+
+def _list_transcripts(ctx: AppContext) -> None:
+    """List transcripts (original behavior, no --query)."""
     args, storage = ctx.args, ctx.storage
     rows = storage.list_transcripts(artist_id=args.artist_id, video_id=args.video_id)
+    limit = getattr(args, "limit", None)
+    if limit is not None:
+        rows = rows[:limit]
     json_rows = [
         {
             "video_id": r["video_id"],
@@ -1433,6 +1457,60 @@ def _cmd_search_transcripts(ctx: AppContext) -> None:
     _hint(
         "\U0001f4a1 Summarize a transcript:",
         f"   yt-artist summarize {sample_vid}",
+        quiet=ctx.quiet,
+    )
+
+
+def _search_transcripts_fts(ctx: AppContext) -> None:
+    """Full-text search mode (--query provided)."""
+    args, storage = ctx.args, ctx.storage
+    query = args.query
+    artist_id = getattr(args, "artist_id", None)
+    limit = getattr(args, "limit", None) or 20
+
+    try:
+        rows = storage.search_transcripts(query, artist_id=artist_id, limit=limit)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    json_rows = [
+        {
+            "video_id": r["video_id"],
+            "artist_id": r.get("artist_id", ""),
+            "title": r.get("title", ""),
+            "transcript_len": r.get("transcript_len", 0),
+            "quality_score": r.get("quality_score"),
+            "snippet": r.get("snippet", ""),
+            "rank": r.get("rank"),
+        }
+        for r in rows
+    ]
+    if _json_print(json_rows, args):
+        return
+
+    if not rows:
+        print(f"No transcripts matching '{query}'.")
+        if artist_id:
+            _hint(
+                "Try without --artist-id to search all transcripts.",
+                quiet=ctx.quiet,
+            )
+        return
+
+    print(f"{'VIDEO_ID':<16}  {'ARTIST':<16}  {'TITLE':<30}  SNIPPET")
+    for r in rows:
+        vid = r["video_id"][:16]
+        artist = (r.get("artist_id") or "")[:16]
+        title = (r.get("title") or "")[:30]
+        if len(r.get("title") or "") > 30:
+            title = title[:27] + "..."
+        snippet = (r.get("snippet") or "")[:80]
+        print(f"{vid:<16}  {artist:<16}  {title:<30}  {snippet}")
+
+    if len(rows) == limit:
+        print(f"\n  (showing top {limit} results; use --limit N for more)")
+    _hint(
+        f"\U0001f4a1 View full transcript: yt-artist search-transcripts --video-id {rows[0]['video_id']}",
         quiet=ctx.quiet,
     )
 
@@ -1550,9 +1628,9 @@ def _cmd_doctor(ctx: AppContext) -> None:
         print("=" * 50)
         print()
 
-    # --- [1/6] yt-dlp installation ---
+    # --- [1/7] yt-dlp installation ---
     if not _is_json:
-        print("[1/6] yt-dlp installation")
+        print("[1/7] yt-dlp installation")
     yt_dlp_path = shutil.which("yt-dlp")
     if yt_dlp_path:
         try:
@@ -1571,9 +1649,9 @@ def _cmd_doctor(ctx: AppContext) -> None:
     if not _is_json:
         print()
 
-    # --- [2/6] YouTube authentication (cookies) ---
+    # --- [2/7] YouTube authentication (cookies) ---
     if not _is_json:
-        print("[2/6] YouTube authentication")
+        print("[2/7] YouTube authentication")
     auth = get_auth_config()
     if auth["cookies_browser"]:
         _ok(f"Cookies: using browser '{auth['cookies_browser']}'", name="cookies")
@@ -1589,9 +1667,9 @@ def _cmd_doctor(ctx: AppContext) -> None:
     if not _is_json:
         print()
 
-    # --- [3/6] PO token ---
+    # --- [3/7] PO token ---
     if not _is_json:
-        print("[3/6] PO token (proof of origin)")
+        print("[3/7] PO token (proof of origin)")
     has_provider = False
     try:
         from importlib.metadata import distribution
@@ -1616,9 +1694,9 @@ def _cmd_doctor(ctx: AppContext) -> None:
     if not _is_json:
         print()
 
-    # --- [4/6] LLM endpoint ---
+    # --- [4/7] LLM endpoint ---
     if not _is_json:
-        print("[4/6] LLM endpoint (for summarize)")
+        print("[4/7] LLM endpoint (for summarize)")
     from yt_artist.llm import check_connectivity, get_config_summary
 
     llm = get_config_summary()
@@ -1635,9 +1713,9 @@ def _cmd_doctor(ctx: AppContext) -> None:
     if not _is_json:
         print()
 
-    # --- [5/6] Test subtitle fetch ---
+    # --- [5/7] Test subtitle fetch ---
     if not _is_json:
-        print("[5/6] Test subtitle fetch (quick metadata check)")
+        print("[5/7] Test subtitle fetch (quick metadata check)")
     if yt_dlp_path:
         test_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # "Me at the zoo" — first YT video
         try:
@@ -1663,10 +1741,10 @@ def _cmd_doctor(ctx: AppContext) -> None:
     else:
         _warn("Skipped (yt-dlp not installed)", name="youtube")
 
-    # --- [6/6] Transcript quality backfill ---
+    # --- [6/7] Transcript quality backfill ---
     if not _is_json:
         print()
-        print("[6/6] Transcript quality scores")
+        print("[6/7] Transcript quality scores")
     unscored = storage.get_unscored_transcripts()
     if unscored:
         from yt_artist.transcript_quality import transcript_quality_score
@@ -1677,6 +1755,18 @@ def _cmd_doctor(ctx: AppContext) -> None:
         _ok(f"Backfilled quality scores for {len(unscored)} transcripts", name="transcript_quality")
     else:
         _ok("All transcripts have quality scores", name="transcript_quality")
+
+    # --- [7/7] FTS5 full-text search ---
+    if not _is_json:
+        print()
+        print("[7/7] Full-text search (FTS5)")
+    if storage.has_fts5():
+        _ok("FTS5 transcript search index available", name="fts5")
+    else:
+        _warn(
+            "FTS5 transcript search not available. Re-run any command to trigger migration, or check SQLite version.",
+            name="fts5",
+        )
 
     # --- JSON output or human-readable summary ---
     if _is_json:

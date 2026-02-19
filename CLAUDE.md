@@ -72,7 +72,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 
 ## DB Schema (tables)
 
-artists, videos, transcripts, prompts, summaries, jobs, request_log, work_ledger, screenshots (future), video_stats (future)
+artists, videos, transcripts, transcripts_fts (FTS5), prompts, summaries, jobs, request_log, work_ledger, screenshots (future), video_stats (future)
 
 ## Environment Variables
 

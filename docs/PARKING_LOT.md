@@ -203,17 +203,18 @@ Hybrid approach: moved SQL into 11 new Storage methods (`create_job`, `update_jo
 
 ---
 
-### 26. FTS5 full-text transcript search `[architecture review]`
-**Why:** `search-transcripts` currently does exact video_id/artist_id filtering only. There's no way to search *within* transcript text (e.g., "find all videos where the speaker mentions dopamine"). This is a significant UX gap for users with large transcript libraries.
+### ~~26. FTS5 full-text transcript search~~ `[architecture review]` ✅ Done (Session 22)
+**Why:** `search-transcripts` had zero text search — only exact video_id/artist_id filtering. Users with 500+ transcripts couldn't search within transcript text.
 
-**Scope:**
-- FTS5 virtual table: `CREATE VIRTUAL TABLE transcripts_fts USING fts5(raw_text, content=transcripts, content_rowid=rowid)`
-- Triggers to keep FTS index in sync on INSERT/UPDATE/DELETE
-- `search-transcripts --query "dopamine"` → ranked results with snippet context
-- Migration: rebuild FTS index from existing transcripts on schema upgrade
-- `--json` support for search results
-
-**Effort:** Medium. FTS5 is well-documented SQLite feature. Main work: migration, index sync triggers, snippet extraction, CLI surface.
+**What was done:**
+1. **FTS5 virtual table** — `transcripts_fts` content-synced with `transcripts` table (no duplicate storage)
+2. **Sync triggers** — `transcripts_ai/ad/au` keep FTS index in sync on INSERT/UPDATE/DELETE
+3. **Migration** — `_migrate_fts5_transcripts()` with FTS5 availability check, rebuild from existing transcripts
+4. **`search_transcripts()`** Storage method — BM25-ranked results with snippet context via `snippet()` function
+5. **CLI** — `--query`/`-q` for FTS5 search, `--limit` for result cap, dual-mode handler (list vs search)
+6. **MCP** — `search_transcripts` tool with query/list dual mode
+7. **Doctor** — FTS5 availability check added as [7/7]
+8. **26 new tests** — storage, migration, trigger sync, CLI, JSON output
 
 ---
 

@@ -370,8 +370,8 @@ class TestDoctor:
             code = _run_cli("doctor", db_path=db)
         assert code == 0
 
-    def test_doctor_shows_six_sections(self, tmp_path, capfd):
-        """doctor should show all 6 check sections."""
+    def test_doctor_shows_seven_sections(self, tmp_path, capfd):
+        """doctor should show all 7 check sections."""
         db = tmp_path / "test.db"
         with (
             patch("shutil.which", return_value="/usr/bin/yt-dlp"),
@@ -383,12 +383,13 @@ class TestDoctor:
             code = _run_cli("doctor", db_path=db)
         assert code == 0
         captured = capfd.readouterr()
-        assert "[1/6]" in captured.out
-        assert "[2/6]" in captured.out
-        assert "[3/6]" in captured.out
-        assert "[4/6]" in captured.out
-        assert "[5/6]" in captured.out
-        assert "[6/6]" in captured.out
+        assert "[1/7]" in captured.out
+        assert "[2/7]" in captured.out
+        assert "[3/7]" in captured.out
+        assert "[4/7]" in captured.out
+        assert "[5/7]" in captured.out
+        assert "[6/7]" in captured.out
+        assert "[7/7]" in captured.out
 
     def test_doctor_detects_missing_yt_dlp(self, tmp_path, capfd):
         """doctor should FAIL when yt-dlp is not installed."""

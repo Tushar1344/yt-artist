@@ -93,6 +93,18 @@ class TranscriptListRow(TypedDict, total=False):
     title: str
 
 
+class TranscriptSearchRow(TypedDict, total=False):
+    """Row returned by search_transcripts (FTS5 search)."""
+
+    video_id: str
+    artist_id: str
+    title: str
+    transcript_len: int
+    quality_score: Optional[float]
+    snippet: str
+    rank: float
+
+
 class WorkLedgerRow(TypedDict, total=False):
     """Row from the work_ledger table."""
 
@@ -222,6 +234,8 @@ class Storage:
             self._migrate_hash_columns(conn)
             conn.commit()
             self._migrate_work_ledger_table(conn)
+            conn.commit()
+            self._migrate_fts5_transcripts(conn)
             conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
@@ -372,6 +386,65 @@ class Storage:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_work_ledger_video_id ON work_ledger(video_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_work_ledger_operation ON work_ledger(operation)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_work_ledger_started_at ON work_ledger(started_at)")
+
+    def _migrate_fts5_transcripts(self, conn: sqlite3.Connection) -> None:
+        """Create FTS5 virtual table + sync triggers and rebuild index for existing DBs."""
+        # Check if FTS5 is available in this SQLite build.
+        try:
+            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)")
+            conn.execute("DROP TABLE IF EXISTS _fts5_probe")
+        except sqlite3.OperationalError:
+            log.warning("FTS5 not available in this SQLite build; full-text search disabled.")
+            return
+
+        # Check if virtual table already exists.
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transcripts_fts'")
+        already_exists = cur.fetchone() is not None
+
+        # Create virtual table (IF NOT EXISTS handles race).
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_fts USING fts5(
+                raw_text,
+                content=transcripts,
+                content_rowid=rowid
+            )
+            """
+        )
+
+        # Create sync triggers (idempotent via IF NOT EXISTS).
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS transcripts_ai AFTER INSERT ON transcripts BEGIN
+                INSERT INTO transcripts_fts(rowid, raw_text) VALUES (new.rowid, new.raw_text);
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS transcripts_ad AFTER DELETE ON transcripts BEGIN
+                INSERT INTO transcripts_fts(transcripts_fts, rowid, raw_text)
+                    VALUES('delete', old.rowid, old.raw_text);
+            END
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS transcripts_au AFTER UPDATE ON transcripts BEGIN
+                INSERT INTO transcripts_fts(transcripts_fts, rowid, raw_text)
+                    VALUES('delete', old.rowid, old.raw_text);
+                INSERT INTO transcripts_fts(rowid, raw_text) VALUES (new.rowid, new.raw_text);
+            END
+            """
+        )
+
+        # Rebuild index from existing transcripts (only on fresh creation).
+        if not already_exists:
+            real_row = conn.execute("SELECT COUNT(*) AS cnt FROM transcripts").fetchone()
+            real_count = real_row["cnt"] if isinstance(real_row, dict) else real_row[0]
+            if real_count > 0:
+                conn.execute("INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild')")
+                log.info("FTS5 index rebuilt from %d existing transcripts.", real_count)
 
     # ------ Artists ------
 
@@ -552,6 +625,61 @@ class Storage:
             return cur.fetchall()  # type: ignore[return-value]
         finally:
             conn.close()
+
+    def search_transcripts(
+        self,
+        query: str,
+        *,
+        artist_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[TranscriptSearchRow]:
+        """Full-text search across transcripts via FTS5.
+
+        Returns BM25-ranked results with snippet context.
+        Raises ValueError if FTS5 is not available or query syntax is invalid.
+        """
+        with self._read_conn() as conn:
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transcripts_fts'")
+            if not cur.fetchone():
+                raise ValueError(
+                    "Full-text search is not available. "
+                    "Re-run any command to trigger migration, or check that your SQLite supports FTS5."
+                )
+            sql = """
+                SELECT t.video_id, v.artist_id, v.title,
+                       length(t.raw_text) AS transcript_len,
+                       t.quality_score,
+                       snippet(transcripts_fts, 0, '[', ']', '...', 32) AS snippet,
+                       rank
+                FROM transcripts_fts
+                JOIN transcripts t ON t.rowid = transcripts_fts.rowid
+                LEFT JOIN videos v ON v.id = t.video_id
+                WHERE transcripts_fts MATCH ?
+            """
+            params: list = [query]
+            if artist_id:
+                sql += " AND v.artist_id = ?"
+                params.append(artist_id)
+            sql += " ORDER BY rank LIMIT ?"
+            params.append(limit)
+            try:
+                cur = conn.execute(sql, params)
+            except sqlite3.OperationalError as exc:
+                msg = str(exc)
+                if "fts5: syntax error" in msg or "parse error" in msg:
+                    raise ValueError(
+                        f"Invalid search query: {query!r}. "
+                        'Use words (AND is implicit), "quoted phrases", word* for prefix, '
+                        "or word1 OR word2 for alternatives."
+                    ) from exc
+                raise
+            return cur.fetchall()  # type: ignore[return-value]
+
+    def has_fts5(self) -> bool:
+        """Return True if the FTS5 virtual table exists and is usable."""
+        with self._read_conn() as conn:
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transcripts_fts'")
+            return cur.fetchone() is not None
 
     def update_transcript_quality_score(self, video_id: str, quality_score: float) -> None:
         """Update quality_score on an existing transcript row (for backfill)."""

@@ -114,6 +114,45 @@ def run_mcp_server() -> None:
             ]
         }
 
+    @mcp.tool()
+    def search_transcripts(
+        query: Optional[str] = None,
+        artist_id: Optional[str] = None,
+        video_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> dict:
+        """Search or list transcripts. With query, full-text search with BM25 ranking and snippets."""
+        storage = storage_factory()
+        if query:
+            try:
+                rows = storage.search_transcripts(query, artist_id=artist_id, limit=limit)
+            except ValueError as exc:
+                return {"error": str(exc), "results": []}
+            return {
+                "results": [
+                    {
+                        "video_id": r["video_id"],
+                        "artist_id": r.get("artist_id", ""),
+                        "title": r.get("title", ""),
+                        "snippet": r.get("snippet", ""),
+                        "rank": r.get("rank"),
+                    }
+                    for r in rows
+                ]
+            }
+        rows = storage.list_transcripts(artist_id=artist_id, video_id=video_id)
+        return {
+            "transcripts": [
+                {
+                    "video_id": r["video_id"],
+                    "artist_id": r.get("artist_id", ""),
+                    "title": r.get("title", ""),
+                    "transcript_len": r.get("transcript_len", 0),
+                }
+                for r in rows[:limit]
+            ]
+        }
+
     mcp.run(transport="stdio")
 
 
