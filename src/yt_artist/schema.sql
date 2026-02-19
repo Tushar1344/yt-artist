@@ -100,9 +100,27 @@ CREATE TABLE IF NOT EXISTS request_log (
     request_type TEXT NOT NULL  -- 'subtitle_download', 'metadata', 'playlist'
 );
 
+-- Per-video work ledger: append-only audit log of operations
+CREATE TABLE IF NOT EXISTS work_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    operation TEXT NOT NULL,       -- 'transcribe', 'summarize', 'score', 'verify'
+    model TEXT,                    -- LLM model (nullable; only summarize/score/verify)
+    prompt_id TEXT,                -- (nullable; only summarize/score)
+    strategy TEXT,                 -- (nullable; only summarize)
+    status TEXT NOT NULL,          -- 'success', 'failed', 'skipped'
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    duration_ms INTEGER,
+    error_message TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_videos_artist_id ON videos(artist_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_video_id ON summaries(video_id);
 CREATE INDEX IF NOT EXISTS idx_summaries_prompt_id ON summaries(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_screenshots_video_id ON screenshots(video_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_request_log_timestamp ON request_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_work_ledger_video_id ON work_ledger(video_id);
+CREATE INDEX IF NOT EXISTS idx_work_ledger_operation ON work_ledger(operation);
+CREATE INDEX IF NOT EXISTS idx_work_ledger_started_at ON work_ledger(started_at);

@@ -93,6 +93,22 @@ class TranscriptListRow(TypedDict, total=False):
     title: str
 
 
+class WorkLedgerRow(TypedDict, total=False):
+    """Row from the work_ledger table."""
+
+    id: int
+    video_id: str
+    operation: str
+    model: Optional[str]
+    prompt_id: Optional[str]
+    strategy: Optional[str]
+    status: str
+    started_at: str
+    finished_at: str
+    duration_ms: Optional[int]
+    error_message: Optional[str]
+
+
 # ---------------------------------------------------------------------------
 # Storage class
 # ---------------------------------------------------------------------------
@@ -188,6 +204,8 @@ class Storage:
             self._migrate_transcript_raw_vtt_column(conn)
             conn.commit()
             self._migrate_hash_columns(conn)
+            conn.commit()
+            self._migrate_work_ledger_table(conn)
             conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
@@ -313,6 +331,31 @@ class Storage:
             conn.execute("ALTER TABLE summaries ADD COLUMN prompt_hash TEXT")
         if "transcript_hash" not in names:
             conn.execute("ALTER TABLE summaries ADD COLUMN transcript_hash TEXT")
+
+    def _migrate_work_ledger_table(self, conn: sqlite3.Connection) -> None:
+        """Create work_ledger table if missing (existing DBs created before work-ledger feature)."""
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='work_ledger'")
+        if not cur.fetchone():
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS work_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    operation TEXT NOT NULL,
+                    model TEXT,
+                    prompt_id TEXT,
+                    strategy TEXT,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    duration_ms INTEGER,
+                    error_message TEXT
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_work_ledger_video_id ON work_ledger(video_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_work_ledger_operation ON work_ledger(operation)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_work_ledger_started_at ON work_ledger(started_at)")
 
     # ------ Artists ------
 
@@ -899,6 +942,100 @@ class Storage:
             return row["cnt"] if isinstance(row, dict) else row[0]
         finally:
             conn.close()
+
+    # ------ Work Ledger ------
+
+    def log_work(
+        self,
+        *,
+        video_id: str,
+        operation: str,
+        status: str,
+        started_at: str,
+        finished_at: str,
+        duration_ms: Optional[int] = None,
+        model: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+        strategy: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> int:
+        """Append a work ledger entry. Returns the row id."""
+        with self._write_conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO work_ledger
+                    (video_id, operation, model, prompt_id, strategy,
+                     status, started_at, finished_at, duration_ms, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    video_id,
+                    operation,
+                    model,
+                    prompt_id,
+                    strategy,
+                    status,
+                    started_at,
+                    finished_at,
+                    duration_ms,
+                    (error_message or "")[:1000] if error_message else None,
+                ),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def get_work_history(
+        self,
+        *,
+        video_id: Optional[str] = None,
+        artist_id: Optional[str] = None,
+        operation: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Query work ledger entries with optional filters.
+
+        When *artist_id* is provided, joins through videos table.
+        Returns newest-first.
+        """
+        with self._read_conn() as conn:
+            if artist_id:
+                sql = (
+                    "SELECT wl.*, v.title AS video_title "
+                    "FROM work_ledger wl "
+                    "JOIN videos v ON v.id = wl.video_id "
+                    "WHERE v.artist_id = ?"
+                )
+                params: list = [artist_id]
+            else:
+                sql = (
+                    "SELECT wl.*, v.title AS video_title "
+                    "FROM work_ledger wl "
+                    "LEFT JOIN videos v ON v.id = wl.video_id "
+                    "WHERE 1=1"
+                )
+                params = []
+
+            if video_id:
+                sql += " AND wl.video_id = ?"
+                params.append(video_id)
+            if operation:
+                sql += " AND wl.operation = ?"
+                params.append(operation)
+            sql += " ORDER BY wl.started_at DESC LIMIT ?"
+            params.append(limit)
+            cur = conn.execute(sql, params)
+            return cur.fetchall()
+
+    def count_work_ledger(self) -> Dict[str, int]:
+        """Return ledger counts by operation and status for the status command."""
+        with self._read_conn() as conn:
+            cur = conn.execute("SELECT operation, status, COUNT(*) AS cnt FROM work_ledger GROUP BY operation, status")
+            rows = cur.fetchall()
+        result: Dict[str, int] = {"total": 0}
+        for row in rows:
+            key = f"{row['operation']}_{row['status']}"
+            result[key] = row["cnt"]
+            result["total"] += row["cnt"]
+        return result
 
     # ------ Helpers ------
 

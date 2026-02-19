@@ -550,6 +550,27 @@ def main() -> None:
     )
     p_export.set_defaults(func=_cmd_export)
 
+    # history: per-video work ledger
+    p_history = subparsers.add_parser(
+        "history",
+        help="Show operation history for a video or artist (transcribe, summarize, score, verify)",
+    )
+    p_history.add_argument("--video-id", default=None, help="Filter by video ID")
+    p_history.add_argument("--artist-id", default=None, help="Filter by artist ID")
+    p_history.add_argument(
+        "--operation",
+        choices=["transcribe", "summarize", "score", "verify"],
+        default=None,
+        help="Filter by operation type",
+    )
+    p_history.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max entries to show (default: 50)",
+    )
+    p_history.set_defaults(func=_cmd_history)
+
     args = parser.parse_args()
 
     # Configure logging: default INFO; YT_ARTIST_LOG_LEVEL overrides (e.g. DEBUG, WARNING).
@@ -1781,6 +1802,7 @@ def _cmd_status(ctx: AppContext) -> None:
     )
     running = list_jobs(storage, status_filter="running")
     rate = get_rate_status(storage)
+    ledger_counts = storage.count_work_ledger()
     try:
         db_size = storage.db_path.stat().st_size
     except OSError:
@@ -1802,6 +1824,13 @@ def _cmd_status(ctx: AppContext) -> None:
             "running_jobs": len(running),
             "youtube_reqs_1h": rate["count_1h"],
             "youtube_reqs_24h": rate["count_24h"],
+            "ledger_total": ledger_counts.get("total", 0),
+            "ledger_transcribe_success": ledger_counts.get("transcribe_success", 0),
+            "ledger_transcribe_failed": ledger_counts.get("transcribe_failed", 0),
+            "ledger_summarize_success": ledger_counts.get("summarize_success", 0),
+            "ledger_summarize_failed": ledger_counts.get("summarize_failed", 0),
+            "ledger_score_success": ledger_counts.get("score_success", 0),
+            "ledger_score_failed": ledger_counts.get("score_failed", 0),
             "db_size_bytes": db_size,
         },
         args,
@@ -1854,6 +1883,18 @@ def _cmd_status(ctx: AppContext) -> None:
     if rate["warning"]:
         print(f"  \u26a0\ufe0f  {rate['warning']}")
 
+    if ledger_counts.get("total", 0) > 0:
+        parts = []
+        for op in ("transcribe", "summarize", "score", "verify"):
+            s = ledger_counts.get(f"{op}_success", 0)
+            f = ledger_counts.get(f"{op}_failed", 0)
+            if s or f:
+                txt = f"{op}: {s} ok"
+                if f:
+                    txt += f", {f} failed"
+                parts.append(txt)
+        print(f"Operations:     {ledger_counts['total']} ({'; '.join(parts)})")
+
     if db_size is not None:
         print(f"DB size:        {_format_size(db_size)}")
     else:
@@ -1903,6 +1944,78 @@ def _cmd_export(ctx: AppContext) -> None:
             f"{artist_info.get('transcripts', 0)} transcripts, "
             f"{artist_info.get('summaries', 0)} summaries"
         )
+
+
+def _cmd_history(ctx: AppContext) -> None:
+    """Show work ledger entries for a video or artist."""
+    args, storage = ctx.args, ctx.storage
+    video_id = (getattr(args, "video_id", None) or "").strip() or None
+    artist_id = (getattr(args, "artist_id", None) or "").strip() or None
+    operation = getattr(args, "operation", None)
+    limit = getattr(args, "limit", 50)
+
+    if not video_id and not artist_id:
+        raise SystemExit("Provide --video-id or --artist-id (or both).")
+
+    rows = storage.get_work_history(
+        video_id=video_id,
+        artist_id=artist_id,
+        operation=operation,
+        limit=limit,
+    )
+
+    if _json_print(
+        [
+            {
+                "id": r["id"],
+                "video_id": r["video_id"],
+                "video_title": r.get("video_title", ""),
+                "operation": r["operation"],
+                "model": r.get("model"),
+                "prompt_id": r.get("prompt_id"),
+                "strategy": r.get("strategy"),
+                "status": r["status"],
+                "started_at": r["started_at"],
+                "finished_at": r["finished_at"],
+                "duration_ms": r.get("duration_ms"),
+                "error_message": r.get("error_message"),
+            }
+            for r in rows
+        ],
+        args,
+    ):
+        return
+
+    if not rows:
+        target = f"video {video_id}" if video_id else f"artist {artist_id}"
+        print(f"No history for {target}.")
+        _hint(
+            "History is recorded automatically when you transcribe, summarize, or score.",
+            "Run some operations first, then check history.",
+            quiet=ctx.quiet,
+        )
+        return
+
+    # Human-readable table
+    print(f"{'STARTED':<20}  {'OP':<12}  {'STATUS':<8}  {'TIME':>8}  {'VIDEO':<16}  MODEL")
+    for r in rows:
+        started = (r["started_at"] or "")[:19]
+        op = r["operation"]
+        status = r["status"]
+        dur = r.get("duration_ms")
+        if dur is not None and dur < 1000:
+            dur_str = f"{dur}ms"
+        elif dur is not None:
+            dur_str = f"{dur / 1000:.1f}s"
+        else:
+            dur_str = "-"
+        vid = r["video_id"][:16]
+        mdl = r.get("model") or "-"
+        err = f"  ERR: {r['error_message'][:60]}" if r.get("error_message") else ""
+        print(f"{started:<20}  {op:<12}  {status:<8}  {dur_str:>8}  {vid:<16}  {mdl}{err}")
+
+    if len(rows) == limit:
+        print(f"\n  (showing {limit} most recent entries; use --limit N for more)")
 
 
 def _cmd_jobs(ctx: AppContext) -> None:

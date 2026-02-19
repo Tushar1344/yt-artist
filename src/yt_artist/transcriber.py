@@ -397,37 +397,61 @@ def transcribe(
     data/artists/{artist_id}/transcripts/{video_id}.txt.
     Returns video_id.
     """
+    from yt_artist.ledger import WorkTimer, record_operation
+
     video_id = extract_video_id(video_url_or_id)
     url = video_url_or_id if video_url_or_id.startswith("http") else f"https://www.youtube.com/watch?v={video_id}"
+    timer = WorkTimer()
 
-    with tempfile.TemporaryDirectory(prefix="yt_artist_") as tmp:
-        out_dir = Path(tmp) / "subs"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        raw_text, fmt, raw_vtt = _run_yt_dlp_subtitles(url, out_dir, storage=storage)
+    try:
+        with tempfile.TemporaryDirectory(prefix="yt_artist_") as tmp:
+            out_dir = Path(tmp) / "subs"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            raw_text, fmt, raw_vtt = _run_yt_dlp_subtitles(url, out_dir, storage=storage)
 
-    from yt_artist.transcript_quality import transcript_quality_score
+        from yt_artist.transcript_quality import transcript_quality_score
 
-    q_score = transcript_quality_score(raw_text)
-    if q_score < 0.3:
-        log.warning(
-            "Low transcript quality for %s (score: %.2f/1.0). May be a music video or non-speech content.",
-            video_id,
-            q_score,
+        q_score = transcript_quality_score(raw_text)
+        if q_score < 0.3:
+            log.warning(
+                "Low transcript quality for %s (score: %.2f/1.0). May be a music video or non-speech content.",
+                video_id,
+                q_score,
+            )
+
+        storage.save_transcript(
+            video_id=video_id,
+            raw_text=raw_text,
+            format=fmt,
+            quality_score=q_score,
+            raw_vtt=raw_vtt,
         )
 
-    storage.save_transcript(
-        video_id=video_id,
-        raw_text=raw_text,
-        format=fmt,
-        quality_score=q_score,
-        raw_vtt=raw_vtt,
-    )
+        if write_transcript_file and data_dir is not None and artist_id:
+            from yt_artist.paths import transcript_file
 
-    if write_transcript_file and data_dir is not None and artist_id:
-        from yt_artist.paths import transcript_file
+            out_file = transcript_file(Path(data_dir), artist_id, video_id)
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(raw_text, encoding="utf-8")
 
-        out_file = transcript_file(Path(data_dir), artist_id, video_id)
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text(raw_text, encoding="utf-8")
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="transcribe",
+            status="success",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+        )
+        return video_id
 
-    return video_id
+    except Exception as exc:
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="transcribe",
+            status="failed",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+            error_message=str(exc)[:500],
+        )
+        raise

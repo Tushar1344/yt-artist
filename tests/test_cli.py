@@ -941,3 +941,119 @@ class TestSummarizeHashIntegration:
         assert len(rows) == 1
         assert rows[0]["prompt_hash"] == content_hash("Summarize: {artist} - {video}")
         assert rows[0]["transcript_hash"] == content_hash("Hello world.")
+
+
+# ---------------------------------------------------------------------------
+# CLI: yt-artist history
+# ---------------------------------------------------------------------------
+
+
+class TestHistory:
+    """Tests for the history subcommand."""
+
+    def _seed_with_ledger(self, store: Storage) -> None:
+        """Seed artist + video + a couple of ledger entries."""
+        _seed_artist_and_video(store)
+        store.log_work(
+            video_id="testvid00001",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+            duration_ms=1000,
+        )
+        store.log_work(
+            video_id="testvid00001",
+            operation="summarize",
+            model="llama3",
+            prompt_id="p1",
+            status="failed",
+            started_at="2026-02-19T10:01:00Z",
+            finished_at="2026-02-19T10:01:02Z",
+            duration_ms=2000,
+            error_message="LLM timeout",
+        )
+
+    def test_requires_filter(self, tmp_path):
+        """history without --video-id or --artist-id exits with error."""
+        db = tmp_path / "test.db"
+        code = _run_cli("history", db_path=db)
+        assert code != 0
+
+    def test_empty_shows_no_history(self, tmp_path, capfd):
+        """history on a video with no ledger entries shows 'No history'."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        _seed_artist_and_video(store)
+        code = _run_cli("history", "--video-id", "testvid00001", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "No history" in out
+
+    def test_with_data_shows_entries(self, tmp_path, capfd):
+        """history shows ledger entries in a table."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        self._seed_with_ledger(store)
+        code = _run_cli("history", "--video-id", "testvid00001", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "transcribe" in out
+        assert "summarize" in out
+        assert "success" in out
+        assert "failed" in out
+        assert "LLM timeout" in out
+
+    def test_json_output(self, tmp_path, capfd):
+        """--json returns valid JSON list with expected keys."""
+        import io
+        import json
+        import logging as _logging
+
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        self._seed_with_ledger(store)
+
+        _logging.root.handlers.clear()
+        argv = ["yt-artist", "--db", str(db), "--json", "history", "--video-id", "testvid00001"]
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            with patch.object(sys, "argv", argv):
+                try:
+                    main()
+                except SystemExit:
+                    pass
+            out = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        data = json.loads(out)
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["operation"] in ("transcribe", "summarize")
+        assert "video_id" in data[0]
+        assert "status" in data[0]
+        assert "duration_ms" in data[0]
+
+    def test_artist_id_filter(self, tmp_path, capfd):
+        """--artist-id returns entries for that artist's videos."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        self._seed_with_ledger(store)
+        code = _run_cli("history", "--artist-id", "@TestArtist", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "transcribe" in out
+        assert "summarize" in out
+
+    def test_operation_filter(self, tmp_path, capfd):
+        """--operation filters to a single operation type."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        self._seed_with_ledger(store)
+        code = _run_cli("history", "--video-id", "testvid00001", "--operation", "transcribe", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "transcribe" in out
+        assert "summarize" not in out

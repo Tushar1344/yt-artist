@@ -295,92 +295,126 @@ def summarize(
       - 'map-reduce': always use map-reduce chunking
       - 'refine': iterative rolling summary
     """
-    transcript_row = storage.get_transcript(video_id)
-    if not transcript_row:
-        raise ValueError(f"No transcript for video_id={video_id}")
-
-    prompt_row = storage.get_prompt(prompt_id)
-    if not prompt_row:
-        raise ValueError(f"No prompt for prompt_id={prompt_id}")
-
-    video_row = storage.get_video(video_id)
-    if not video_row:
-        log.warning("Video %s not in DB; proceeding without artist/title context.", video_id)
-
-    artist_row = storage.get_artist(video_row["artist_id"]) if video_row else None
-
-    artist = artist_override or ((artist_row.get("about") or artist_row.get("name") or "") if artist_row else "")
-    video_title = video_override or (video_row["title"] if video_row else "")
-
-    # Render the DB template with context variables
-    system_prompt = _fill_template(
-        prompt_row["template"],
-        artist=artist,
-        video=video_title,
-        intent=intent_override or "",
-        audience=audience_override or "",
-    )
-
-    raw_text = transcript_row["raw_text"]
-    max_chars = get_app_config().max_transcript_chars
-
-    # Resolve strategy
-    strat = strategy or _get_strategy()
-    fits_in_context = max_chars <= 0 or len(raw_text) <= max_chars
-
-    if strat == "truncate":
-        # Legacy behavior: truncate then single-pass
-        if not fits_in_context and max_chars > 0:
-            original_len = len(raw_text)
-            raw_text = raw_text[:max_chars]
-            est_tokens_saved = (original_len - max_chars) // 4
-            log.warning(
-                "Transcript for %s truncated from %d to %d chars (~%d tokens saved). "
-                "Set YT_ARTIST_MAX_TRANSCRIPT_CHARS to adjust.",
-                video_id,
-                original_len,
-                max_chars,
-                est_tokens_saved,
-            )
-        summary_text = _summarize_single(raw_text, system_prompt)
-
-    elif strat == "map-reduce":
-        if fits_in_context:
-            summary_text = _summarize_single(raw_text, system_prompt)
-        else:
-            summary_text = _summarize_map_reduce(raw_text, max_chars, system_prompt)
-
-    elif strat == "refine":
-        if fits_in_context:
-            summary_text = _summarize_single(raw_text, system_prompt)
-        else:
-            summary_text = _summarize_refine(raw_text, max_chars, system_prompt)
-
-    else:  # "auto"
-        if fits_in_context:
-            summary_text = _summarize_single(raw_text, system_prompt)
-        else:
-            log.info(
-                "Auto strategy: transcript (%d chars) exceeds limit (%d), using map-reduce.", len(raw_text), max_chars
-            )
-            summary_text = _summarize_map_reduce(raw_text, max_chars, system_prompt)
-
-    if not summary_text.strip():
-        raise ValueError(f"LLM returned empty summary for video_id={video_id}")
-
     from yt_artist.hashing import content_hash
+    from yt_artist.ledger import WorkTimer, record_operation
     from yt_artist.llm import get_model_name
 
-    p_hash = content_hash(prompt_row["template"])
-    t_hash = content_hash(transcript_row["raw_text"])
+    # Resolve model/strategy early so they're available for ledger on both paths.
+    effective_model = get_model_name(model)
+    strat = strategy or _get_strategy()
+    timer = WorkTimer()
 
-    storage.upsert_summary(
-        video_id=video_id,
-        prompt_id=prompt_id,
-        content=summary_text,
-        model=get_model_name(model),
-        strategy=strat,
-        prompt_hash=p_hash,
-        transcript_hash=t_hash,
-    )
-    return f"{video_id}:{prompt_id}"
+    try:
+        transcript_row = storage.get_transcript(video_id)
+        if not transcript_row:
+            raise ValueError(f"No transcript for video_id={video_id}")
+
+        prompt_row = storage.get_prompt(prompt_id)
+        if not prompt_row:
+            raise ValueError(f"No prompt for prompt_id={prompt_id}")
+
+        video_row = storage.get_video(video_id)
+        if not video_row:
+            log.warning("Video %s not in DB; proceeding without artist/title context.", video_id)
+
+        artist_row = storage.get_artist(video_row["artist_id"]) if video_row else None
+
+        artist = artist_override or ((artist_row.get("about") or artist_row.get("name") or "") if artist_row else "")
+        video_title = video_override or (video_row["title"] if video_row else "")
+
+        # Render the DB template with context variables
+        system_prompt = _fill_template(
+            prompt_row["template"],
+            artist=artist,
+            video=video_title,
+            intent=intent_override or "",
+            audience=audience_override or "",
+        )
+
+        raw_text = transcript_row["raw_text"]
+        max_chars = get_app_config().max_transcript_chars
+
+        fits_in_context = max_chars <= 0 or len(raw_text) <= max_chars
+
+        if strat == "truncate":
+            # Legacy behavior: truncate then single-pass
+            if not fits_in_context and max_chars > 0:
+                original_len = len(raw_text)
+                raw_text = raw_text[:max_chars]
+                est_tokens_saved = (original_len - max_chars) // 4
+                log.warning(
+                    "Transcript for %s truncated from %d to %d chars (~%d tokens saved). "
+                    "Set YT_ARTIST_MAX_TRANSCRIPT_CHARS to adjust.",
+                    video_id,
+                    original_len,
+                    max_chars,
+                    est_tokens_saved,
+                )
+            summary_text = _summarize_single(raw_text, system_prompt)
+
+        elif strat == "map-reduce":
+            if fits_in_context:
+                summary_text = _summarize_single(raw_text, system_prompt)
+            else:
+                summary_text = _summarize_map_reduce(raw_text, max_chars, system_prompt)
+
+        elif strat == "refine":
+            if fits_in_context:
+                summary_text = _summarize_single(raw_text, system_prompt)
+            else:
+                summary_text = _summarize_refine(raw_text, max_chars, system_prompt)
+
+        else:  # "auto"
+            if fits_in_context:
+                summary_text = _summarize_single(raw_text, system_prompt)
+            else:
+                log.info(
+                    "Auto strategy: transcript (%d chars) exceeds limit (%d), using map-reduce.",
+                    len(raw_text),
+                    max_chars,
+                )
+                summary_text = _summarize_map_reduce(raw_text, max_chars, system_prompt)
+
+        if not summary_text.strip():
+            raise ValueError(f"LLM returned empty summary for video_id={video_id}")
+
+        p_hash = content_hash(prompt_row["template"])
+        t_hash = content_hash(transcript_row["raw_text"])
+
+        storage.upsert_summary(
+            video_id=video_id,
+            prompt_id=prompt_id,
+            content=summary_text,
+            model=effective_model,
+            strategy=strat,
+            prompt_hash=p_hash,
+            transcript_hash=t_hash,
+        )
+
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="summarize",
+            model=effective_model,
+            prompt_id=prompt_id,
+            strategy=strat,
+            status="success",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+        )
+        return f"{video_id}:{prompt_id}"
+
+    except Exception as exc:
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="summarize",
+            model=effective_model,
+            prompt_id=prompt_id,
+            strategy=strat,
+            status="failed",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+            error_message=str(exc)[:500],
+        )
+        raise

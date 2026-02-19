@@ -320,3 +320,82 @@ class TestStatusStale:
         assert "stale_prompt" in data
         assert "stale_transcript" in data
         assert "stale_unknown" in data
+
+
+# ---------------------------------------------------------------------------
+# Status: work ledger integration
+# ---------------------------------------------------------------------------
+
+
+class TestStatusLedger:
+    def _seed_ledger(self, store: Storage) -> None:
+        """Seed artist + video + ledger entries for status tests."""
+        _seed(store, n_artists=1, n_videos=1)
+        vid = store.list_videos()[0]["id"]
+        store.log_work(
+            video_id=vid,
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+            duration_ms=1000,
+        )
+        store.log_work(
+            video_id=vid,
+            operation="summarize",
+            status="failed",
+            started_at="2026-02-19T10:01:00Z",
+            finished_at="2026-02-19T10:01:02Z",
+            duration_ms=2000,
+            error_message="LLM timeout",
+        )
+
+    def test_status_shows_operations_line(self, tmp_path, capfd):
+        """status shows Operations line when ledger has data."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        self._seed_ledger(store)
+        code = _run_cli("status", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "Operations:" in out
+        assert "2" in out  # total count
+        assert "transcribe:" in out
+        assert "summarize:" in out
+
+    def test_status_no_operations_when_empty(self, tmp_path, capfd):
+        """status hides Operations line when ledger is empty."""
+        db = tmp_path / "test.db"
+        code = _run_cli("status", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "Operations:" not in out
+
+    def test_status_json_includes_ledger_fields(self, tmp_path, capfd):
+        """--json output includes ledger_total and per-operation fields."""
+        import io
+        import json
+        import logging as _logging
+
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        self._seed_ledger(store)
+
+        _logging.root.handlers.clear()
+        argv = ["yt-artist", "--db", str(db), "--json", "status"]
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            with patch.object(sys, "argv", argv):
+                try:
+                    main()
+                except SystemExit:
+                    pass
+            out = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        data = json.loads(out)
+        assert data["ledger_total"] == 2
+        assert data["ledger_transcribe_success"] == 1
+        assert data["ledger_summarize_failed"] == 1

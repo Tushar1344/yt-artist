@@ -696,3 +696,206 @@ class TestStalenessDetection:
         """Empty input returns empty result."""
         result = store.get_stale_video_ids([], "hp1")
         assert result == {"stale_prompt": [], "stale_transcript": [], "stale_unknown": []}
+
+
+# ---------------------------------------------------------------------------
+# Work Ledger tests
+# ---------------------------------------------------------------------------
+
+
+def _setup_ledger_video(store):
+    """Seed a minimal artist+video for work ledger tests."""
+    store.upsert_artist(
+        artist_id="@WL",
+        name="WL Artist",
+        channel_url="https://www.youtube.com/@WL",
+        urllist_path="data/artists/@WL/urllist.md",
+    )
+    store.upsert_video(
+        video_id="wlv1",
+        artist_id="@WL",
+        url="https://www.youtube.com/watch?v=wlv1",
+        title="Work Ledger Video",
+    )
+
+
+class TestWorkLedger:
+    """Tests for the work_ledger table CRUD operations."""
+
+    def test_log_work_and_query(self, store):
+        """Round-trip: log_work inserts, get_work_history retrieves."""
+        _setup_ledger_video(store)
+        row_id = store.log_work(
+            video_id="wlv1",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:05Z",
+            duration_ms=5000,
+        )
+        assert row_id > 0
+        rows = store.get_work_history(video_id="wlv1")
+        assert len(rows) == 1
+        assert rows[0]["operation"] == "transcribe"
+        assert rows[0]["status"] == "success"
+        assert rows[0]["duration_ms"] == 5000
+        assert rows[0]["video_title"] == "Work Ledger Video"
+
+    def test_log_work_with_error(self, store):
+        """Failed operations include error_message."""
+        _setup_ledger_video(store)
+        store.log_work(
+            video_id="wlv1",
+            operation="summarize",
+            status="failed",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+            duration_ms=1000,
+            error_message="LLM timeout",
+            model="llama3",
+            prompt_id="p1",
+            strategy="auto",
+        )
+        rows = store.get_work_history(video_id="wlv1")
+        assert len(rows) == 1
+        assert rows[0]["error_message"] == "LLM timeout"
+        assert rows[0]["model"] == "llama3"
+        assert rows[0]["prompt_id"] == "p1"
+
+    def test_get_work_history_by_artist(self, store):
+        """artist_id filter joins through videos table."""
+        _setup_ledger_video(store)
+        # Second artist
+        store.upsert_artist(
+            artist_id="@WL2",
+            name="WL2",
+            channel_url="https://www.youtube.com/@WL2",
+            urllist_path="data/artists/@WL2/urllist.md",
+        )
+        store.upsert_video(
+            video_id="wlv2",
+            artist_id="@WL2",
+            url="https://www.youtube.com/watch?v=wlv2",
+            title="Other Video",
+        )
+        store.log_work(
+            video_id="wlv1",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+        )
+        store.log_work(
+            video_id="wlv2",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:02Z",
+            finished_at="2026-02-19T10:00:03Z",
+        )
+        rows = store.get_work_history(artist_id="@WL")
+        assert len(rows) == 1
+        assert rows[0]["video_id"] == "wlv1"
+
+    def test_get_work_history_by_operation(self, store):
+        """operation filter works."""
+        _setup_ledger_video(store)
+        store.log_work(
+            video_id="wlv1",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+        )
+        store.log_work(
+            video_id="wlv1",
+            operation="summarize",
+            status="success",
+            started_at="2026-02-19T10:00:02Z",
+            finished_at="2026-02-19T10:00:03Z",
+        )
+        rows = store.get_work_history(video_id="wlv1", operation="summarize")
+        assert len(rows) == 1
+        assert rows[0]["operation"] == "summarize"
+
+    def test_get_work_history_limit(self, store):
+        """limit parameter caps results."""
+        _setup_ledger_video(store)
+        for i in range(10):
+            store.log_work(
+                video_id="wlv1",
+                operation="score",
+                status="success",
+                started_at=f"2026-02-19T10:00:{i:02d}Z",
+                finished_at=f"2026-02-19T10:00:{i + 1:02d}Z",
+            )
+        rows = store.get_work_history(video_id="wlv1", limit=5)
+        assert len(rows) == 5
+
+    def test_multiple_entries_per_video(self, store):
+        """Append-only: same video can have multiple ledger entries."""
+        _setup_ledger_video(store)
+        store.log_work(
+            video_id="wlv1",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+        )
+        store.log_work(
+            video_id="wlv1",
+            operation="summarize",
+            status="success",
+            started_at="2026-02-19T10:00:02Z",
+            finished_at="2026-02-19T10:00:03Z",
+        )
+        store.log_work(
+            video_id="wlv1",
+            operation="score",
+            status="failed",
+            started_at="2026-02-19T10:00:04Z",
+            finished_at="2026-02-19T10:00:05Z",
+            error_message="connection refused",
+        )
+        rows = store.get_work_history(video_id="wlv1")
+        assert len(rows) == 3
+
+    def test_count_work_ledger(self, store):
+        """count_work_ledger returns operation/status breakdown."""
+        _setup_ledger_video(store)
+        store.log_work(
+            video_id="wlv1",
+            operation="transcribe",
+            status="success",
+            started_at="2026-02-19T10:00:00Z",
+            finished_at="2026-02-19T10:00:01Z",
+        )
+        store.log_work(
+            video_id="wlv1",
+            operation="summarize",
+            status="success",
+            started_at="2026-02-19T10:00:02Z",
+            finished_at="2026-02-19T10:00:03Z",
+        )
+        store.log_work(
+            video_id="wlv1",
+            operation="summarize",
+            status="failed",
+            started_at="2026-02-19T10:00:04Z",
+            finished_at="2026-02-19T10:00:05Z",
+        )
+        counts = store.count_work_ledger()
+        assert counts["total"] == 3
+        assert counts["transcribe_success"] == 1
+        assert counts["summarize_success"] == 1
+        assert counts["summarize_failed"] == 1
+
+    def test_migrate_work_ledger_idempotent(self, store):
+        """Running migration twice does not error."""
+        conn = store._conn()
+        try:
+            store._migrate_work_ledger_table(conn)
+            conn.commit()
+            store._migrate_work_ledger_table(conn)
+            conn.commit()
+        finally:
+            conn.close()

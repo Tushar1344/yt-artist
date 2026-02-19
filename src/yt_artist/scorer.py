@@ -464,43 +464,107 @@ def score_video_summary(
     Returns the score dict, or None if no summary/transcript found.
     If *verify* is True, runs claim verification (1 extra LLM call).
     """
+    from yt_artist.ledger import WorkTimer, record_operation
+    from yt_artist.llm import get_model_name
+
+    timer = WorkTimer()
+    effective_model = get_model_name(model) if not skip_llm else None
+
     rows = storage.get_summaries_for_video(video_id)
     summary_row = next((r for r in rows if r["prompt_id"] == prompt_id), None)
     if not summary_row:
         log.warning("No summary for video_id=%s prompt_id=%s", video_id, prompt_id)
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="score",
+            prompt_id=prompt_id,
+            status="skipped",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+            error_message="no summary found",
+        )
         return None
 
     transcript_row = storage.get_transcript(video_id)
     if not transcript_row:
         log.warning("No transcript for video_id=%s", video_id)
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="score",
+            prompt_id=prompt_id,
+            status="skipped",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+            error_message="no transcript found",
+        )
         return None
 
-    scores = score_summary(
-        summary_row["content"],
-        transcript_row["raw_text"],
-        model=model,
-        skip_llm=skip_llm,
-        verify=verify,
-    )
+    try:
+        scores = score_summary(
+            summary_row["content"],
+            transcript_row["raw_text"],
+            model=model,
+            skip_llm=skip_llm,
+            verify=verify,
+        )
 
-    storage.update_summary_scores(
-        video_id=video_id,
-        prompt_id=prompt_id,
-        quality_score=scores["quality_score"],
-        heuristic_score=scores["heuristic_score"],
-        llm_score=scores["llm_score"],
-        faithfulness_score=scores.get("faithfulness_score"),
-        verification_score=scores.get("verification_score"),
-    )
+        storage.update_summary_scores(
+            video_id=video_id,
+            prompt_id=prompt_id,
+            quality_score=scores["quality_score"],
+            heuristic_score=scores["heuristic_score"],
+            llm_score=scores["llm_score"],
+            faithfulness_score=scores.get("faithfulness_score"),
+            verification_score=scores.get("verification_score"),
+        )
 
-    log.info(
-        "Scored %s:%s — quality=%.2f (heuristic=%.2f, llm=%s, faith=%s, verified=%s)",
-        video_id,
-        prompt_id,
-        scores["quality_score"],
-        scores["heuristic_score"],
-        f"{scores['llm_score']:.2f}" if scores["llm_score"] is not None else "N/A",
-        f"{scores['faithfulness_score']:.2f}" if scores.get("faithfulness_score") is not None else "N/A",
-        f"{scores['verification_score']:.0%}" if scores.get("verification_score") is not None else "N/A",
-    )
-    return scores
+        log.info(
+            "Scored %s:%s — quality=%.2f (heuristic=%.2f, llm=%s, faith=%s, verified=%s)",
+            video_id,
+            prompt_id,
+            scores["quality_score"],
+            scores["heuristic_score"],
+            f"{scores['llm_score']:.2f}" if scores["llm_score"] is not None else "N/A",
+            f"{scores['faithfulness_score']:.2f}" if scores.get("faithfulness_score") is not None else "N/A",
+            f"{scores['verification_score']:.0%}" if scores.get("verification_score") is not None else "N/A",
+        )
+
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="score",
+            model=effective_model,
+            prompt_id=prompt_id,
+            status="success",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+        )
+        if verify and scores.get("verification_score") is not None:
+            record_operation(
+                storage,
+                video_id=video_id,
+                operation="verify",
+                model=effective_model,
+                prompt_id=prompt_id,
+                status="success",
+                started_at=timer.started_at,
+                duration_ms=timer.elapsed_ms(),
+            )
+
+        return scores
+
+    except Exception as exc:
+        record_operation(
+            storage,
+            video_id=video_id,
+            operation="score",
+            model=effective_model,
+            prompt_id=prompt_id,
+            status="failed",
+            started_at=timer.started_at,
+            duration_ms=timer.elapsed_ms(),
+            error_message=str(exc)[:500],
+        )
+        raise

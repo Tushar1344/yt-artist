@@ -193,16 +193,8 @@ DB size:      12.4 MB
 
 ---
 
-### 24. Per-video work ledger table `[architecture review]`
-**Why:** No history of *what* was done to each video and *when*. If a summarization fails, was retried, or produced different results with a different model, there's no audit trail. The current schema only stores the latest state (transcript exists or not, summary exists or not).
-
-**Scope:**
-- New `work_ledger` table: `(id, video_id, operation, model, prompt_id, started_at, finished_at, status, error_message)`
-- Operations: `transcribe`, `summarize`, `score`, `verify`
-- Enables: retry-with-backoff intelligence, cost tracking per operation, "what changed" debugging
-- CLI: `yt-artist history --video-id X` → show all operations for a video
-
-**Effort:** Medium. Schema + storage methods + CLI command + backfill question (populate from existing data?).
+### ~~24. Per-video work ledger table~~ `[architecture review]` ✅ Done (Session 19)
+Append-only `work_ledger` table recording every transcribe/summarize/score/verify operation with timing, status, model, prompt, strategy, and error info. `WorkTimer` + `record_operation()` in `ledger.py` (best-effort, never breaks operations). Domain functions instrumented. CLI `history` command + ledger counts in `status`.
 
 ---
 

@@ -53,9 +53,10 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Connection context managers: _read_conn() for reads, _write_conn() for single writes, transaction() for batch writes
 - Path centralization: paths.py has pure functions for all runtime data file paths (no mkdir)
 - Config centralization: config.py has typed frozen dataclasses for all env vars, @lru_cache accessors. Tests clear caches via conftest autouse fixture.
-- JSON output: `--json` global flag on CLI, `_json_print()` helper. Supported by: list-prompts, search-transcripts, status, jobs list, doctor, set-about, export
+- JSON output: `--json` global flag on CLI, `_json_print()` helper. Supported by: list-prompts, search-transcripts, status, jobs list, doctor, set-about, export, history
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
 - Staleness detection: SHA-256 hashes of prompt template and transcript content stored on summaries table; hashing.py utility. `--force`/`--stale-only` flags on summarize, stale counts in status.
+- Work ledger: append-only audit log in ledger.py. `WorkTimer` for timing, `record_operation()` best-effort write (never raises). Domain functions (transcribe, summarize, score) auto-log to `work_ledger` table.
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 
 ## Conventions
@@ -71,7 +72,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 
 ## DB Schema (tables)
 
-artists, videos, transcripts, prompts, summaries, jobs, request_log, screenshots (future), video_stats (future)
+artists, videos, transcripts, prompts, summaries, jobs, request_log, work_ledger, screenshots (future), video_stats (future)
 
 ## Environment Variables
 
