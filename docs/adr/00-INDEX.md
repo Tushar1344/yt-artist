@@ -19,5 +19,7 @@
   - [ADR-0013](0013-long-transcript-summarization.md) — Long-transcript summarization strategies and quality scoring (accepted)
 - **Quality & prompts**
   - [ADR-0014](0014-baml-prompts-hallucination-guardrails.md) — BAML prompt management and hallucination guardrails (accepted)
+- **Search**
+  - [ADR-0015](0015-fts5-transcript-search.md) — FTS5 full-text transcript search (accepted)
 - **User experience**
   - [ADR-0009](0009-guided-onboarding.md) — Guided onboarding (hints, quickstart, --quiet)
