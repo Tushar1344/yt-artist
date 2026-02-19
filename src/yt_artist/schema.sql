@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS summaries (
     verification_score REAL,
     model TEXT,
     strategy TEXT,
+    prompt_hash TEXT,
+    transcript_hash TEXT,
     UNIQUE(video_id, prompt_id)
 );
 

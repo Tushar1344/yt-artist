@@ -823,3 +823,121 @@ class TestAppContext:
 
         cli_mod._bg_job_id = None
         cli_mod._bg_storage = None
+
+
+# ---------------------------------------------------------------------------
+# Summarize --force / --stale-only
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeForce:
+    def _seed_summarized(self, store):
+        """Seed an artist with one video that is already transcribed and summarized."""
+        _seed_artist_and_video(store)
+        _seed_prompt(store, "p1")
+        store.save_transcript(video_id="testvid00001", raw_text="Hello world transcript.", format="vtt")
+        store.upsert_summary(
+            video_id="testvid00001",
+            prompt_id="p1",
+            content="Old summary.",
+        )
+
+    def test_force_resummarizes_all(self, tmp_path, capfd):
+        """--force causes already-summarized videos to be re-summarized."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        self._seed_summarized(store)
+
+        with (
+            patch("yt_artist.cli.summarize", return_value="testvid00001:p1") as mock_sum,
+            patch("yt_artist.cli._check_llm"),
+        ):
+            code = _run_cli(
+                "summarize",
+                "--artist-id",
+                "@TestArtist",
+                "--prompt",
+                "p1",
+                "--force",
+                db_path=db,
+            )
+        assert code == 0
+        # summarize() should have been called (not skipped)
+        assert mock_sum.called
+
+    def test_without_force_skips_existing(self, tmp_path, capfd):
+        """Without --force, already-summarized videos are skipped."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        self._seed_summarized(store)
+
+        with (
+            patch("yt_artist.cli.summarize", return_value="testvid00001:p1") as mock_sum,
+            patch("yt_artist.cli._check_llm"),
+        ):
+            code = _run_cli(
+                "summarize",
+                "--artist-id",
+                "@TestArtist",
+                "--prompt",
+                "p1",
+                db_path=db,
+            )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "already summarized" in captured.out
+        assert not mock_sum.called
+
+    def test_stale_only_without_force_skips(self, tmp_path, capfd):
+        """--stale-only without --force has no effect (skip like normal)."""
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        self._seed_summarized(store)
+
+        with (
+            patch("yt_artist.cli.summarize", return_value="testvid00001:p1") as mock_sum,
+            patch("yt_artist.cli._check_llm"),
+        ):
+            code = _run_cli(
+                "summarize",
+                "--artist-id",
+                "@TestArtist",
+                "--prompt",
+                "p1",
+                "--stale-only",
+                db_path=db,
+            )
+        assert code == 0
+        captured = capfd.readouterr()
+        assert "already summarized" in captured.out
+        assert not mock_sum.called
+
+
+# ---------------------------------------------------------------------------
+# Summarize hash integration
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeHashIntegration:
+    def test_summarize_stores_hashes(self, tmp_path):
+        """After summarize(), summary row has non-null hashes matching inputs."""
+        from yt_artist.hashing import content_hash
+        from yt_artist.summarizer import summarize
+
+        db = tmp_path / "test.db"
+        store = Storage(db)
+        store.ensure_schema()
+        _seed_artist_and_video(store)
+        _seed_prompt(store, "p1")
+        store.save_transcript(video_id="testvid00001", raw_text="Hello world.", format="vtt")
+
+        with patch("yt_artist.summarizer.llm_complete", return_value="Great summary."):
+            summarize("testvid00001", "p1", store)
+
+        rows = store.get_summaries_for_video("testvid00001")
+        assert len(rows) == 1
+        assert rows[0]["prompt_hash"] == content_hash("Summarize: {artist} - {video}")
+        assert rows[0]["transcript_hash"] == content_hash("Hello world.")

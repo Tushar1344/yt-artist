@@ -517,3 +517,182 @@ class TestConnectionContextManagers:
         store.set_artist_default_prompt("UC_wctx", "wctx_p")
         artist = store.get_artist("UC_wctx")
         assert artist["default_prompt_id"] == "wctx_p"
+
+
+# ---------------------------------------------------------------------------
+# Hash persistence and staleness detection
+# ---------------------------------------------------------------------------
+
+
+def _setup_hash_data(store):
+    """Seed artist + video + transcript + prompt for hash tests."""
+    store.upsert_artist(
+        artist_id="@hash",
+        name="Hash Test",
+        channel_url="https://www.youtube.com/@hash",
+        urllist_path="data/artists/@hash/urllist.md",
+    )
+    store.upsert_video(
+        video_id="hv1",
+        artist_id="@hash",
+        url="https://www.youtube.com/watch?v=hv1",
+        title="Hash Video",
+    )
+    store.save_transcript(video_id="hv1", raw_text="Transcript content.", format="vtt")
+    store.upsert_prompt(prompt_id="hp1", name="Hash Prompt", template="Summarize: {video}")
+
+
+class TestHashPersistence:
+    def test_upsert_summary_with_hashes(self, store):
+        """prompt_hash and transcript_hash are persisted."""
+        _setup_hash_data(store)
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="A great summary.",
+            prompt_hash="abc123",
+            transcript_hash="def456",
+        )
+        rows = store.get_summaries_for_video("hv1")
+        assert len(rows) == 1
+        assert rows[0]["prompt_hash"] == "abc123"
+        assert rows[0]["transcript_hash"] == "def456"
+
+    def test_upsert_summary_hashes_default_to_none(self, store):
+        """Omitting hashes stores NULL (backward compat)."""
+        _setup_hash_data(store)
+        store.upsert_summary(video_id="hv1", prompt_id="hp1", content="No hashes.")
+        rows = store.get_summaries_for_video("hv1")
+        assert rows[0]["prompt_hash"] is None
+        assert rows[0]["transcript_hash"] is None
+
+    def test_upsert_summary_hashes_updated_on_overwrite(self, store):
+        """Re-summarizing updates hash columns."""
+        _setup_hash_data(store)
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="V1.",
+            prompt_hash="old_ph",
+            transcript_hash="old_th",
+        )
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="V2.",
+            prompt_hash="new_ph",
+            transcript_hash="new_th",
+        )
+        rows = store.get_summaries_for_video("hv1")
+        assert rows[0]["prompt_hash"] == "new_ph"
+        assert rows[0]["transcript_hash"] == "new_th"
+        assert rows[0]["content"] == "V2."
+
+    def test_migrate_hash_columns_idempotent(self, store):
+        """Running migration twice does not error."""
+
+        conn = store._conn()
+        try:
+            store._migrate_hash_columns(conn)
+            conn.commit()
+            store._migrate_hash_columns(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        # Still works after double-migration
+        _setup_hash_data(store)
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="OK.",
+            prompt_hash="ph",
+            transcript_hash="th",
+        )
+
+
+class TestStalenessDetection:
+    def test_count_stale_all_fresh(self, store):
+        """Zero stale when all hashes match current data."""
+        from yt_artist.hashing import content_hash
+
+        _setup_hash_data(store)
+        t_row = store.get_transcript("hv1")
+        p_row = store.get_prompt("hp1")
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="Fresh.",
+            prompt_hash=content_hash(p_row["template"]),
+            transcript_hash=content_hash(t_row["raw_text"]),
+        )
+        counts = store.get_stale_summary_counts()
+        assert counts["total_stale"] == 0
+
+    def test_count_stale_prompt_changed(self, store):
+        """Changing prompt template makes summary stale."""
+        from yt_artist.hashing import content_hash
+
+        _setup_hash_data(store)
+        t_row = store.get_transcript("hv1")
+        # Save with current hashes
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="Before.",
+            prompt_hash=content_hash("Summarize: {video}"),
+            transcript_hash=content_hash(t_row["raw_text"]),
+        )
+        # Now change the prompt template
+        store.upsert_prompt(prompt_id="hp1", name="Hash Prompt", template="NEW template: {video}")
+        counts = store.get_stale_summary_counts()
+        assert counts["stale_prompt"] == 1
+        assert counts["total_stale"] == 1
+
+    def test_count_stale_transcript_changed(self, store):
+        """Updating transcript makes summary stale."""
+        from yt_artist.hashing import content_hash
+
+        _setup_hash_data(store)
+        p_row = store.get_prompt("hp1")
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="Before.",
+            prompt_hash=content_hash(p_row["template"]),
+            transcript_hash=content_hash("Transcript content."),
+        )
+        # Re-save transcript with different text
+        store.save_transcript(video_id="hv1", raw_text="Updated transcript.", format="vtt")
+        counts = store.get_stale_summary_counts()
+        assert counts["stale_transcript"] == 1
+        assert counts["total_stale"] == 1
+
+    def test_count_stale_null_is_unknown(self, store):
+        """NULL hashes count as stale_unknown."""
+        _setup_hash_data(store)
+        store.upsert_summary(video_id="hv1", prompt_id="hp1", content="Legacy.")
+        counts = store.get_stale_summary_counts()
+        assert counts["stale_unknown"] == 1
+        assert counts["total_stale"] == 1
+
+    def test_stale_video_ids_prompt_changed(self, store):
+        """get_stale_video_ids returns IDs with changed prompts."""
+        from yt_artist.hashing import content_hash
+
+        _setup_hash_data(store)
+        t_row = store.get_transcript("hv1")
+        store.upsert_summary(
+            video_id="hv1",
+            prompt_id="hp1",
+            content="S.",
+            prompt_hash=content_hash("Summarize: {video}"),
+            transcript_hash=content_hash(t_row["raw_text"]),
+        )
+        store.upsert_prompt(prompt_id="hp1", name="HP", template="CHANGED: {video}")
+        result = store.get_stale_video_ids(["hv1"], "hp1")
+        assert "hv1" in result["stale_prompt"]
+
+    def test_stale_video_ids_empty_list(self, store):
+        """Empty input returns empty result."""
+        result = store.get_stale_video_ids([], "hp1")
+        assert result == {"stale_prompt": [], "stale_transcript": [], "stale_unknown": []}

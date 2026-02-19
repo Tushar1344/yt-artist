@@ -247,3 +247,76 @@ class TestStatusCommand:
         db = tmp_path / "test.db"
         code = _run_cli("status", db_path=db)
         assert code == 0
+
+
+# ---------------------------------------------------------------------------
+# Status: stale summary counts
+# ---------------------------------------------------------------------------
+
+
+class TestStatusStale:
+    def test_status_shows_stale_count(self, tmp_path, capfd):
+        """Stale line shown when summaries have NULL hashes."""
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        _seed(store, n_artists=1, n_videos=2, n_transcripts=2, n_summaries=2)
+        # Summaries have no hashes → counted as stale_unknown
+        code = _run_cli("status", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "Stale:" in out
+        assert "unknown" in out
+
+    def test_status_no_stale_when_fresh(self, tmp_path, capfd):
+        """No Stale line when all hashes match."""
+        from yt_artist.hashing import content_hash
+
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        _seed(store, n_artists=1, n_videos=1, n_transcripts=1)
+        vid = store.list_videos()[0]["id"]
+        prompts = store.list_prompts()
+        pid = prompts[0]["id"]
+        t_row = store.get_transcript(vid)
+        p_row = store.get_prompt(pid)
+        store.upsert_summary(
+            video_id=vid,
+            prompt_id=pid,
+            content="Fresh summary.",
+            prompt_hash=content_hash(p_row["template"]),
+            transcript_hash=content_hash(t_row["raw_text"]),
+        )
+        code = _run_cli("status", db_path=db)
+        assert code == 0
+        out = capfd.readouterr().out
+        assert "Stale:" not in out
+
+    def test_status_json_includes_stale_fields(self, tmp_path, capfd):
+        """--json output includes stale_summaries key."""
+        import io
+        import json
+        import logging as _logging
+
+        db = tmp_path / "test.db"
+        store = _make_store(tmp_path)
+        _seed(store, n_artists=1, n_videos=1, n_transcripts=1, n_summaries=1)
+
+        _logging.root.handlers.clear()
+        argv = ["yt-artist", "--db", str(db), "--json", "status"]
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            with patch.object(sys, "argv", argv):
+                try:
+                    main()
+                except SystemExit:
+                    pass
+            out = sys.stdout.getvalue()
+        finally:
+            sys.stdout = old_stdout
+
+        data = json.loads(out)
+        assert "stale_summaries" in data
+        assert "stale_prompt" in data
+        assert "stale_transcript" in data
+        assert "stale_unknown" in data

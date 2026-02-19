@@ -384,6 +384,19 @@ def main() -> None:
         metavar="THRESHOLD",
         help="Skip transcripts below quality threshold (default: 0.3 if flag given without value)",
     )
+    p_sum.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Re-summarize videos even if a summary exists",
+    )
+    p_sum.add_argument(
+        "--stale-only",
+        action="store_true",
+        default=False,
+        dest="stale_only",
+        help="With --force, only re-summarize stale summaries (prompt or transcript changed)",
+    )
     p_sum.set_defaults(func=_cmd_summarize)
 
     # add-prompt: define a prompt template
@@ -1087,7 +1100,28 @@ def _cmd_summarize(ctx: AppContext) -> None:
 
     # Batch DB check: one query for summary existence instead of N get_summaries_for_video.
     already_summarized = storage.video_ids_with_summary(all_ids, prompt_id)
-    to_summarize = [v for v in videos if v["id"] not in already_summarized]
+    force = getattr(args, "force", False)
+    stale_only = getattr(args, "stale_only", False)
+
+    if force and stale_only:
+        # Re-summarize only stale ones (prompt/transcript changed or unknown provenance).
+        stale = storage.get_stale_video_ids(list(already_summarized), prompt_id)
+        stale_set = set(stale["stale_prompt"] + stale["stale_transcript"] + stale["stale_unknown"])
+        to_summarize = [v for v in videos if v["id"] not in already_summarized or v["id"] in stale_set]
+        if stale_set and not ctx.quiet:
+            _parts = []
+            if stale["stale_prompt"]:
+                _parts.append(f"{len(stale['stale_prompt'])} prompt changed")
+            if stale["stale_transcript"]:
+                _parts.append(f"{len(stale['stale_transcript'])} transcript updated")
+            if stale["stale_unknown"]:
+                _parts.append(f"{len(stale['stale_unknown'])} unknown provenance")
+            log.info("Stale summaries to re-generate: %s", ", ".join(_parts))
+    elif force:
+        # Re-summarize everything.
+        to_summarize = list(videos)
+    else:
+        to_summarize = [v for v in videos if v["id"] not in already_summarized]
     skipped = len(videos) - len(to_summarize)
 
     # Filter out low-quality transcripts when --skip-low-quality is used.
@@ -1129,6 +1163,11 @@ def _cmd_summarize(ctx: AppContext) -> None:
             print(f"Would transcribe {len(missing)} videos (missing transcripts).")
         est = estimate_time(len(to_summarize), "summarize", concurrency)
         already = len(videos) - len(to_summarize)
+        if force and stale_only:
+            # stale and stale_set are defined when force+stale_only in the skip logic above.
+            _n_force = len(to_summarize) - (len(videos) - len(already_summarized))
+            if _n_force > 0:
+                print(f"  (includes {_n_force} stale re-summarizations)")
         print(
             f"Would summarize {len(to_summarize)} videos ({already} already done). Estimated: ~{format_estimate(est)}"
         )
@@ -1735,6 +1774,11 @@ def _cmd_status(ctx: AppContext) -> None:
     n_scored = storage.count_scored_summaries()
     avg_q = storage.avg_quality_score()
     n_prompts = storage.count_prompts()
+    stale_info = (
+        storage.get_stale_summary_counts()
+        if n_summarized > 0
+        else {"stale_prompt": 0, "stale_transcript": 0, "stale_unknown": 0, "total_stale": 0}
+    )
     running = list_jobs(storage, status_filter="running")
     rate = get_rate_status(storage)
     try:
@@ -1751,6 +1795,10 @@ def _cmd_status(ctx: AppContext) -> None:
             "scored": n_scored,
             "avg_quality": avg_q,
             "prompts": n_prompts,
+            "stale_summaries": stale_info["total_stale"],
+            "stale_prompt": stale_info["stale_prompt"],
+            "stale_transcript": stale_info["stale_transcript"],
+            "stale_unknown": stale_info["stale_unknown"],
             "running_jobs": len(running),
             "youtube_reqs_1h": rate["count_1h"],
             "youtube_reqs_24h": rate["count_24h"],
@@ -1778,6 +1826,16 @@ def _cmd_status(ctx: AppContext) -> None:
         if avg_q is not None:
             score_info += f", avg quality: {avg_q:.2f}"
     print(f"Videos:         {n_videos} ({n_transcribed} transcribed, {n_summarized} summarized{score_info})")
+    n_stale = stale_info["total_stale"]
+    if n_stale > 0:
+        stale_parts = []
+        if stale_info["stale_prompt"]:
+            stale_parts.append(f"{stale_info['stale_prompt']} prompt changed")
+        if stale_info["stale_transcript"]:
+            stale_parts.append(f"{stale_info['stale_transcript']} transcript updated")
+        if stale_info["stale_unknown"]:
+            stale_parts.append(f"{stale_info['stale_unknown']} unknown")
+        print(f"Stale:          {n_stale} ({', '.join(stale_parts)})")
     print(f"Prompts:        {n_prompts}")
 
     if running:

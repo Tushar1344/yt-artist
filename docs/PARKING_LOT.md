@@ -235,17 +235,16 @@ DB size:      12.4 MB
 
 ---
 
-### 27. Persist model/prompt/transcript hashes `[architecture review]`
+### ~~27. Persist model/prompt/transcript hashes~~ `[architecture review]` ✅ Done (Session 19)
 **Why:** Currently summaries store `model` as a plain string but no hash of the prompt template or transcript content. There's no way to detect "this summary is stale because the prompt changed" or "we should re-summarize because the transcript was updated." Re-summarization today is all-or-nothing.
 
-**Scope:**
-- New columns on `summaries` table: `prompt_hash TEXT`, `transcript_hash TEXT`
-- Hash: SHA-256 of prompt template text and transcript content at summarization time
-- `summarize --force` could check hashes: "3 summaries are stale (prompt changed), 2 stale (transcript updated)"
-- `status` command: show stale summary count
-- Migration: existing summaries get NULL hashes (unknown provenance)
-
-**Effort:** Medium. Schema change + hash computation at summarize time + staleness detection logic.
+**What was done:**
+1. **hashing.py** — new `content_hash()` utility (SHA-256 hex digest)
+2. **Schema** — added `prompt_hash TEXT`, `transcript_hash TEXT` to summaries table + idempotent migration
+3. **Storage** — `upsert_summary()` persists hashes; `get_stale_summary_counts()` + `get_stale_video_ids()` for staleness detection
+4. **Summarizer** — computes SHA-256 of raw prompt template + raw transcript text at summarization time
+5. **CLI** — `--force` (re-summarize all) and `--stale-only` (with --force, only re-summarize stale) flags on `summarize`; `status` shows stale count with breakdown (prompt changed / transcript updated / unknown provenance)
+6. Existing summaries get NULL hashes → counted as stale_unknown (correct default)
 
 ---
 

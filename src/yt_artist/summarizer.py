@@ -368,7 +368,11 @@ def summarize(
     if not summary_text.strip():
         raise ValueError(f"LLM returned empty summary for video_id={video_id}")
 
+    from yt_artist.hashing import content_hash
     from yt_artist.llm import get_model_name
+
+    p_hash = content_hash(prompt_row["template"])
+    t_hash = content_hash(transcript_row["raw_text"])
 
     storage.upsert_summary(
         video_id=video_id,
@@ -376,5 +380,7 @@ def summarize(
         content=summary_text,
         model=get_model_name(model),
         strategy=strat,
+        prompt_hash=p_hash,
+        transcript_hash=t_hash,
     )
     return f"{video_id}:{prompt_id}"

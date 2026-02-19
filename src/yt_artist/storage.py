@@ -77,6 +77,8 @@ class SummaryRow(TypedDict, total=False):
     verification_score: Optional[float]
     model: Optional[str]
     strategy: Optional[str]
+    prompt_hash: Optional[str]
+    transcript_hash: Optional[str]
 
 
 class TranscriptListRow(TypedDict, total=False):
@@ -184,6 +186,8 @@ class Storage:
             self._migrate_transcript_quality_column(conn)
             conn.commit()
             self._migrate_transcript_raw_vtt_column(conn)
+            conn.commit()
+            self._migrate_hash_columns(conn)
             conn.commit()
             self._ensure_default_prompt(conn)
             conn.commit()
@@ -299,6 +303,16 @@ class Storage:
         names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
         if "raw_vtt" not in names:
             conn.execute("ALTER TABLE transcripts ADD COLUMN raw_vtt TEXT")
+
+    def _migrate_hash_columns(self, conn: sqlite3.Connection) -> None:
+        """Add prompt_hash and transcript_hash columns to summaries if missing."""
+        cur = conn.execute("PRAGMA table_info(summaries)")
+        rows = cur.fetchall()
+        names = {row["name"] if isinstance(row, dict) else row[1] for row in rows}
+        if "prompt_hash" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN prompt_hash TEXT")
+        if "transcript_hash" not in names:
+            conn.execute("ALTER TABLE summaries ADD COLUMN transcript_hash TEXT")
 
     # ------ Artists ------
 
@@ -559,20 +573,25 @@ class Storage:
         content: str,
         model: Optional[str] = None,
         strategy: Optional[str] = None,
+        prompt_hash: Optional[str] = None,
+        transcript_hash: Optional[str] = None,
     ) -> None:
         conn = self._conn()
         try:
             conn.execute(
                 """
-                INSERT INTO summaries (video_id, prompt_id, content, created_at, model, strategy)
-                VALUES (?, ?, ?, datetime('now'), ?, ?)
+                INSERT INTO summaries (video_id, prompt_id, content, created_at,
+                                       model, strategy, prompt_hash, transcript_hash)
+                VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?)
                 ON CONFLICT(video_id, prompt_id) DO UPDATE SET
                     content = excluded.content,
                     created_at = datetime('now'),
                     model = excluded.model,
-                    strategy = excluded.strategy
+                    strategy = excluded.strategy,
+                    prompt_hash = excluded.prompt_hash,
+                    transcript_hash = excluded.transcript_hash
                 """,
-                (video_id, prompt_id, content, model, strategy),
+                (video_id, prompt_id, content, model, strategy, prompt_hash, transcript_hash),
             )
             conn.commit()
         finally:
@@ -657,6 +676,100 @@ class Storage:
             return {row["video_id"] if isinstance(row, dict) else row[0] for row in rows}
         finally:
             conn.close()
+
+    # ------ Staleness detection ------
+
+    def get_stale_summary_counts(self) -> Dict[str, int]:
+        """Count summaries whose prompt or transcript hash differs from current data.
+
+        Returns dict with keys: stale_prompt, stale_transcript, stale_unknown, total_stale.
+        NULL hashes count as stale_unknown (legacy rows without provenance).
+        """
+        from yt_artist.hashing import content_hash
+
+        with self._read_conn() as conn:
+            cur = conn.execute(
+                "SELECT s.prompt_hash, s.transcript_hash, p.template, t.raw_text "
+                "FROM summaries s "
+                "LEFT JOIN prompts p ON p.id = s.prompt_id "
+                "LEFT JOIN transcripts t ON t.video_id = s.video_id"
+            )
+            rows = cur.fetchall()
+
+        stale_prompt = 0
+        stale_transcript = 0
+        stale_unknown = 0
+
+        for row in rows:
+            s_ph = row["prompt_hash"]
+            s_th = row["transcript_hash"]
+            if s_ph is None or s_th is None:
+                stale_unknown += 1
+                continue
+            current_ph = content_hash(row["template"]) if row["template"] else None
+            current_th = content_hash(row["raw_text"]) if row["raw_text"] else None
+            if current_ph and s_ph != current_ph:
+                stale_prompt += 1
+            elif current_th and s_th != current_th:
+                stale_transcript += 1
+
+        return {
+            "stale_prompt": stale_prompt,
+            "stale_transcript": stale_transcript,
+            "stale_unknown": stale_unknown,
+            "total_stale": stale_prompt + stale_transcript + stale_unknown,
+        }
+
+    def get_stale_video_ids(self, video_ids: List[str], prompt_id: str) -> Dict[str, List[str]]:
+        """Return video_ids whose summary is stale for *prompt_id*.
+
+        Returns dict: stale_prompt, stale_transcript, stale_unknown — each a list of video_ids.
+        """
+        from yt_artist.hashing import content_hash
+
+        empty: Dict[str, List[str]] = {"stale_prompt": [], "stale_transcript": [], "stale_unknown": []}
+        if not video_ids:
+            return empty
+
+        conn = self._conn()
+        try:
+            rows = self._execute_chunked_in(
+                conn,
+                "SELECT s.video_id, s.prompt_hash, s.transcript_hash, "
+                "p.template, t.raw_text "
+                "FROM summaries s "
+                "LEFT JOIN prompts p ON p.id = s.prompt_id "
+                "LEFT JOIN transcripts t ON t.video_id = s.video_id "
+                "WHERE s.prompt_id = ? AND s.video_id IN ({placeholders})",
+                video_ids,
+                extra_params=[prompt_id],
+            )
+        finally:
+            conn.close()
+
+        stale_prompt: List[str] = []
+        stale_transcript: List[str] = []
+        stale_unknown: List[str] = []
+
+        for row in rows:
+            vid = row["video_id"]
+            s_ph = row["prompt_hash"]
+            s_th = row["transcript_hash"]
+            if s_ph is None or s_th is None:
+                stale_unknown.append(vid)
+                continue
+            current_ph = content_hash(row["template"]) if row["template"] else None
+            current_th = content_hash(row["raw_text"]) if row["raw_text"] else None
+            if current_ph and s_ph != current_ph:
+                stale_prompt.append(vid)
+            elif current_th and s_th != current_th:
+                stale_transcript.append(vid)
+
+        return {
+            "stale_prompt": stale_prompt,
+            "stale_transcript": stale_transcript,
+            "stale_unknown": stale_unknown,
+        }
 
     # ------ Scoring ------
 

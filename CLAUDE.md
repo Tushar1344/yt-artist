@@ -55,6 +55,7 @@ ruff check src/ tests/ --fix                             # lint + autofix
 - Config centralization: config.py has typed frozen dataclasses for all env vars, @lru_cache accessors. Tests clear caches via conftest autouse fixture.
 - JSON output: `--json` global flag on CLI, `_json_print()` helper. Supported by: list-prompts, search-transcripts, status, jobs list, doctor, set-about, export
 - Rate-limit tracking: request_log table, check_rate_warning() in rate_limit.py
+- Staleness detection: SHA-256 hashes of prompt template and transcript content stored on summaries table; hashing.py utility. `--force`/`--stale-only` flags on summarize, stale counts in status.
 - Tests mock yt-dlp and LLM calls — never hit real YouTube in tests
 
 ## Conventions
