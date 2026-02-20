@@ -1,6 +1,6 @@
 # The yt-artist Development Journey: Building a CLI Tool with Human-AI Collaboration
 
-*A record of iterative, collaborative development between a human developer and Claude across 15 sessions.*
+*A record of iterative, collaborative development between a human developer and Claude across 22 sessions.*
 
 ---
 
@@ -309,18 +309,118 @@ All prompts now include explicit anti-hallucination instructions: "Only state fa
 
 ---
 
+## Session 16: Transcript Quality, Timestamped Transcripts, BG Health Check
+
+**Focus:** Three parking lot items — pre-summarize transcript quality scoring, raw VTT storage, and background worker health checks.
+
+**What happened:**
+- **Transcript quality scoring** (item #8): Heuristic scorer in `transcript_quality.py` — word count, repetition ratio, average word length, punctuation density, line uniqueness. Flags low-quality transcripts before wasting LLM calls. Doctor check added.
+- **Timestamped transcripts** (item #22): `raw_vtt` column on transcripts table stores original VTT with timestamps. Available via `--include-vtt` on export.
+- **BG worker health check** (item #11): Background child writes a "started" marker within 5 seconds, parent verifies. Documents the known limitation of re-execution pattern.
+
+**Result:** 537 tests passing.
+
+---
+
+## Session 17: Export/Backup
+
+**Focus:** Data portability — users with hundreds of transcribed videos need to know their data isn't locked in SQLite.
+
+**What we built:**
+- `yt-artist export --format json` — chunked JSON per artist (N videos per file, self-contained with artist metadata + prompts).
+- `yt-artist export --format csv` — flat relational tables (artists, videos, transcripts, summaries, prompts).
+- `--zip` compresses each file individually. `--include-vtt` includes raw timestamps. `--chunk-size N` configurable.
+- Manifest.json with export metadata, file sizes, and per-artist stats.
+- Memory-efficient: iterates per-video, never loads all transcripts at once.
+
+**Result:** 570 tests passing.
+
+**Design principle:** Export files are self-contained. Each JSON chunk includes the artist metadata and referenced prompts — you can read a single chunk file and understand everything in it without the manifest.
+
+---
+
+## Session 18: CLI Structural Refactor
+
+**Focus:** `cli.py` was 1,600 lines with 3 module-level globals and a 297-line `_cmd_summarize`.
+
+**What we built:**
+- **AppContext dataclass** — replaced `_quiet`, `_bg_job_id`, `_bg_storage` globals + the `(args, storage, data_dir)` triple with a single context object threaded through all 15 `_cmd_*` handlers.
+- **Decomposed `_cmd_summarize`** — extracted `_summarize_single()`, `_summarize_bulk_sequential()`, `_summarize_pipeline()`. The handler is now ~130 lines of setup + dispatch.
+
+**Result:** 594 tests passing.
+
+**Key insight:** We deliberately deferred splitting cli.py into a `commands/` package. With one entrypoint and ~1,600 lines, a single file is navigable. The package split is only justified when adding a second entrypoint (API server, TUI) or crossing ~2,500 lines.
+
+---
+
+## Session 19: Work Ledger + Summary Provenance
+
+**Focus:** Audit trail for operations and staleness detection for summaries.
+
+**What we built:**
+- **Work ledger** (item #24): Append-only `work_ledger` table in `ledger.py`. `WorkTimer` for timing, `record_operation()` best-effort write. Domain functions (transcribe, summarize, score) auto-log every operation. CLI `history` command shows recent activity.
+- **Summary provenance** (item #27): SHA-256 hashes of prompt template and transcript content stored on summaries. `--force`/`--stale-only` flags on summarize. `status` command shows stale count with breakdown (prompt changed / transcript updated / unknown provenance).
+
+**Result:** 621 tests passing.
+
+**Design principle:** The work ledger is best-effort — `record_operation()` never raises exceptions. A logging failure must never break the operation being logged.
+
+---
+
+## Session 20: Encapsulate DB Connections
+
+**Focus:** Eliminate all external `storage._conn()` calls — the last remaining architectural debt.
+
+**What we built:**
+- 11 new Storage methods (`create_job`, `update_job_pid`, `get_job`, `update_job_progress`, `finalize_job`, `mark_job_stale`, `list_recent_jobs`, `delete_old_jobs`, `log_rate_request`, `count_rate_requests`, `get_unscored_transcripts`).
+- Replaced 21 test `_conn()` calls with `transaction()` context manager.
+- Added `JobRow` TypedDict. Zero `_conn()` calls remain outside `storage.py`.
+
+**Result:** 637 tests passing.
+
+---
+
+## Session 21: Profiling + Parking Lot Triage
+
+**Focus:** Profile the codebase to determine if performance language migration (Rust/C) was worthwhile.
+
+**What we found:** Python is not the bottleneck. Every CPU-bound function runs for single-digit milliseconds, then waits seconds-to-minutes for yt-dlp, LLM, or SQLite I/O. The heaviest pure-Python function (`_key_term_coverage()`) takes ~15ms, followed by a 5-30s LLM call.
+
+**Decision:** Closed parking lot item #12 ("Performance language migration") as "won't do." Created three new Python-level items (#28-30) that address actual measured inefficiencies: N+1 export queries, multi-pass transcript scoring, and staleness hash recomputation.
+
+---
+
+## Session 22: FTS5 Search, MCP Fix, Export Optimization
+
+**Focus:** Three high-value parking lot items in a single session.
+
+**What we built:**
+
+### FTS5 full-text transcript search (item #26)
+Users with 500+ transcripts couldn't search within transcript text. We added an FTS5 external content table synced via triggers, BM25-ranked results with snippet context, `--query`/`-q` and `--limit` CLI flags, and dual-mode behavior (list without `--query`, search with it). 26 new tests. ADR-0015 documents the design.
+
+### MCP dependency fix (item #7)
+`mcp>=1.0.0` requires Python ≥3.10 but the project supports ≥3.9. One-line fix: PEP 508 environment marker `mcp>=1.0.0; python_version>='3.10'` in pyproject.toml. `mcp_server.py` already had a lazy import guard.
+
+### N+1 export query fix (item #28)
+`export_csv()` made ~2,000 DB queries for 500 videos. Added `get_transcripts_for_videos()` and `get_summaries_for_videos()` batch methods, refactored `_build_video_entry()` to accept pre-fetched data. Reduced to ~2 total queries.
+
+**Result:** 660 tests passing. Parking lot scorecard: 24 of 30 items resolved.
+
+---
+
 ## What We Built: By the Numbers
 
 | Metric | Value |
 |--------|-------|
-| Source files | 18 Python modules + 3 BAML files (scoring only) |
-| Source lines | ~6,300 |
-| Test files | 31 test modules |
-| Total tests | 487 |
-| ADRs | 14 (0001-0014) |
-| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py`, `paths.py`, `config.py` |
-| Sessions | 15 |
-| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 → 450 → 487 |
+| Source files | 21 Python modules + 3 BAML files (scoring only) |
+| Source lines | ~7,500 |
+| Test files | 37 test modules |
+| Total tests | 660 |
+| ADRs | 15 (0001-0015) |
+| New modules created | `jobs.py`, `pipeline.py`, `rate_limit.py`, `scorer.py`, `prompts.py`, `paths.py`, `config.py`, `transcript_quality.py`, `ledger.py`, `exporter.py`, `hashing.py` |
+| Sessions | 22 |
+| Test growth | 81 → 99 → 109 → 138 → 170 → ~225 → ~270 → 308 → 325 → 378 → 405 → 414 → 487 → 537 → 570 → 594 → 621 → 637 → 660 |
 
 ---
 
@@ -371,12 +471,14 @@ All prompts now include explicit anti-hallucination instructions: "Only state fa
 
 ## The Road Ahead (Parking Lot)
 
-Items explicitly deferred for future sessions:
+24 of 30 parking lot items resolved. 2 remaining technical items, 4 product-direction items:
 
-1. **Performance optimization:** Analyze which modules could benefit from Rust/Go/C++ for hot paths (yt-dlp subprocess management, large transcript processing).
-2. **Licensing and payment:** Design a freemium model (e.g., free for 10K summaries, paid tiers for 50K+). What usage metrics do users need to see?
-3. **Usage metrics tracking:** What counters matter? Summaries generated, transcripts processed, API calls made, processing time.
-4. **Shippable product:** Package for distribution (PyPI, Homebrew tap). Onboarding flow for non-technical users. Documentation polish.
+1. **Single-pass transcript scoring** (#29): Collapse 5 separate text passes into 1-2. Currently ~1-5ms/video — correctness fix, not performance-critical.
+2. **Staleness hash caching** (#30): Backfill NULL hashes for legacy summaries so staleness checks are pure SQL comparisons.
+3. **Licensing and payment** (#13): Freemium model design for potential consumer product.
+4. **Usage metrics tracking** (#14): Counters for summaries, transcripts, API calls, processing time.
+5. **Shippable product readiness** (#15): PyPI, Homebrew tap, GitHub Actions CI/CD.
+6. **Public blog post** (#16): Polish JOURNEY.md for external audience.
 
 ---
 

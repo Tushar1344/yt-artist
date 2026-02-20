@@ -183,7 +183,7 @@ yt-artist --db test_run.db summarize --artist-id @SomeChannel
 
 ## Docs
 
-- [Architecture decisions](docs/adr/00-INDEX.md) — ADR index (14 ADRs)
+- [Architecture decisions](docs/adr/00-INDEX.md) — ADR index (15 ADRs)
 - [Architecture diagrams](docs/ARCHITECTURE_DIAGRAMS.md) — module graph, data flow, ER diagram, pipeline, strategies, scoring, BAML prompts, hallucination guardrails
 - [Development journey](docs/JOURNEY.md) — how this project was built iteratively
 - [Session summary](docs/SESSION_SUMMARY.md) — detailed technical log of all development sessions

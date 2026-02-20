@@ -121,7 +121,7 @@ export DB=./yt.db
 | `build-artist-prompt --artist-id @X [--channel-url URL] [--save-as-default]` | Search and build “about” text for the artist; store in DB. Optional: create a prompt and set as artist default. Optional dependency: duckduckgo-search. |
 | `add-prompt --id ID --name NAME --template "..."` | Define a prompt template (placeholders: `{artist}`, `{video}`, `{intent}`, `{audience}`). |
 | `list-prompts` | List stored prompt templates. |
-| `search-transcripts` [--artist-id ID] [--video-id ID] | List transcripts in the DB; optionally filter. |
+| `search-transcripts` [--artist-id ID] [--video-id ID] [--query/-q TEXT] [--limit N] | Search or list transcripts. With `--query`: full-text search with ranked results and snippets. Without: list/filter mode. |
 | `jobs` | List all background jobs with progress (ID, status, done/total, command). |
 | `jobs attach <job_id>` | Tail the log of a job. Press Ctrl-C to detach (job keeps running). |
 | `jobs stop <job_id>` | Send SIGTERM to stop a running background job. |
@@ -137,6 +137,8 @@ export DB=./yt.db
 **Summarize options:** `--strategy {auto,truncate,map-reduce,refine}`, `--score`/`--no-score`
 
 **Export options:** `--format json|csv` (default: json), `--output-dir DIR`, `--include-vtt` (include raw VTT timestamps), `--chunk-size N` (videos per JSON chunk, default 50), `--zip` (compress each file)
+
+**Search options:** `--query/-q TEXT` (FTS5 full-text search: phrases `"quoted"`, prefix `word*`, boolean `OR`), `--limit N` (max results, default 20)
 
 **Score options:** `--skip-llm` (heuristic-only, zero LLM calls), `--verify` (claim verification, 1 extra LLM call per summary). Runs in parallel when `--concurrency` > 1.
 

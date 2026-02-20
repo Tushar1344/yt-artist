@@ -1,6 +1,6 @@
 # yt-artist Development Session Summary
 
-*Comprehensive summary of all 15 development sessions.*
+*Comprehensive summary of all 22 development sessions.*
 
 ---
 
@@ -497,9 +497,131 @@ Accessor functions: `get_youtube_config()`, `get_llm_config()`, `get_app_config(
 
 ---
 
+## Session 16: Transcript Quality, Timestamps, BG Health Check (537 tests)
+
+**Goal:** Three parking lot items — pre-summarize transcript quality scoring (#8), raw VTT storage (#22), BG worker health check (#11).
+
+**Changes:**
+- New `transcript_quality.py` module: heuristic transcript scoring (word count, repetition, avg word length, punctuation density, line uniqueness). `--skip-low-quality` flag on summarize.
+- `raw_vtt` column on transcripts table. `--include-vtt` on export. VTT preserved alongside plain text.
+- Background worker health check: child writes "started" marker, parent verifies within 5s.
+- Doctor check [6/6] for transcript quality availability.
+
+**New test modules:** test_transcript_quality, additions to test_exporter, test_background_jobs
+
+---
+
+## Session 17: Export/Backup (570 tests)
+
+**Goal:** Data portability — chunked JSON and flat CSV export.
+
+**Changes:**
+- New `exporter.py` module: `export_json()` (chunked per-artist, N videos/file) and `export_csv()` (flat relational tables)
+- `--zip` compresses each file. `--include-vtt` includes raw timestamps. `--chunk-size N` configurable.
+- Manifest.json with export metadata, file sizes, per-artist stats.
+- CLI: `export` subcommand with `--format`, `--artist-id`, `--zip`, `--include-vtt`, `--chunk-size`, `--json` flags.
+
+**New test module:** test_exporter
+
+---
+
+## Session 18: CLI Structural Refactor (594 tests)
+
+**Goal:** Replace module globals and decompose `_cmd_summarize` (parking lot #23).
+
+**Changes:**
+- `AppContext` dataclass: holds args, storage, data_dir, quiet, bg_job_id, bg_storage
+- Threaded through all 15 `_cmd_*` handlers, replacing `_quiet`/`_bg_job_id`/`_bg_storage` globals
+- `_cmd_summarize` decomposed: `_summarize_single()`, `_summarize_bulk_sequential()`, `_summarize_pipeline()` extracted
+- `_hint()` and `_run_bulk()` accept explicit params instead of reading globals
+
+**Test modules updated:** test_cli, test_background_jobs, test_pipeline
+
+---
+
+## Session 19: Work Ledger + Summary Provenance (621 tests)
+
+**Goal:** Operation audit trail (#24) and staleness detection (#27).
+
+**Changes:**
+
+### Work Ledger (ledger.py, ~120 lines)
+- Append-only `work_ledger` table: operation, video_id, artist_id, status, elapsed_ms, model, prompt_id, strategy, error
+- `WorkTimer` context manager for timing. `record_operation()` best-effort write (never raises).
+- Domain functions (transcriber, summarizer, scorer) auto-log operations.
+- CLI `history` command. Ledger counts in `status`.
+
+### Summary Provenance (hashing.py + storage changes)
+- `content_hash()` utility (SHA-256 hex digest)
+- `prompt_hash TEXT`, `transcript_hash TEXT` columns on summaries table
+- `get_stale_summary_counts()` and `get_stale_video_ids()` for staleness detection
+- `--force`/`--stale-only` flags on summarize. `status` shows stale breakdown.
+
+**New test modules:** test_ledger, test_hashing, additions to test_storage
+
+---
+
+## Session 20: Encapsulate DB Connections (637 tests)
+
+**Goal:** Eliminate all external `storage._conn()` calls (parking lot #25).
+
+**Changes:**
+- 11 new Storage methods: `create_job`, `update_job_pid`, `get_job`, `update_job_progress`, `finalize_job`, `mark_job_stale`, `list_recent_jobs`, `delete_old_jobs`, `log_rate_request`, `count_rate_requests`, `get_unscored_transcripts`
+- `JobRow` TypedDict added
+- 21 test `_conn()` calls replaced with `transaction()` context manager
+- Fixed `transcriber.py` line 323 direct `os.environ` read → `get_youtube_config().po_token`
+- Zero `_conn()` calls remain outside `storage.py`
+
+**Test modules updated:** test_storage, test_background_jobs, test_rate_limit, test_cli
+
+---
+
+## Session 21: Profiling + Parking Lot Triage
+
+**Goal:** Determine if performance language migration (Rust/C) is worthwhile.
+
+**Changes:**
+- Profiled all CPU-bound functions. Heaviest: `_key_term_coverage()` at ~15ms, followed by 5-30s LLM calls.
+- Closed parking lot #12 as "won't do" — Python is not the bottleneck, I/O is.
+- Created 3 new items from profiling: #28 (N+1 export queries), #29 (single-pass transcript scoring), #30 (staleness hash caching).
+
+**No code changes.** Documentation-only session (PARKING_LOT.md updated).
+
+---
+
+## Session 22: FTS5 Search, MCP Fix, Export Optimization (660 tests)
+
+**Goal:** Three parking lot items — FTS5 transcript search (#26), MCP dependency fix (#7), N+1 export fix (#28).
+
+**Changes:**
+
+### FTS5 Full-Text Transcript Search (#26)
+- `transcripts_fts` FTS5 virtual table (external content, content_rowid=rowid)
+- Sync triggers: `transcripts_ai` (INSERT), `transcripts_ad` (DELETE), `transcripts_au` (UPDATE)
+- `_migrate_fts5_transcripts()` with FTS5 availability check, `rebuild` for existing transcripts
+- `search_transcripts()` Storage method: BM25-ranked, snippet extraction (`snippet()` with `[`/`]` markers)
+- CLI: `--query`/`-q` FTS5 search, `--limit` result cap, dual-mode (list vs search)
+- MCP: `search_transcripts` tool with query/list dual mode
+- Doctor: FTS5 check [7/7]
+- ADR-0015 documenting design decisions
+
+### MCP Dependency Fix (#7)
+- PEP 508 environment marker: `mcp>=1.0.0; python_version>='3.10'` in pyproject.toml
+- `mcp_server.py` lazy import guard unchanged
+
+### N+1 Export Fix (#28)
+- `get_transcripts_for_videos(video_ids)` and `get_summaries_for_videos(video_ids)` batch methods using `_execute_chunked_in()`
+- `_build_video_entry()` refactored: accepts pre-fetched transcript/summaries instead of per-video DB queries
+- `export_json()`: 2 batch queries per chunk (was 2×chunk_size)
+- `export_csv()`: 2 total queries (was ~2000 for 500 videos)
+
+**New test modules:** test_fts_search (26 tests), additions to test_storage (9 batch tests), test_exporter updated
+
+---
+
 ## Final Project State
 
-### Source code (~6,300 lines across 18 modules)
+### Source code (~7,500 lines across 21 modules)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
@@ -518,11 +640,15 @@ Accessor functions: `get_youtube_config()`, `get_llm_config()`, `get_app_config(
 | `paths.py` | ~55 | Centralized path construction for runtime data files |
 | `prompts.py` | 48 | BAML adapter: 2 scoring functions (score_summary, verify_claims) |
 | `config.py` | ~140 | Typed frozen dataclasses for all env vars, @lru_cache accessors |
+| `exporter.py` | ~400 | Export/backup: JSON (chunked) and CSV with manifest |
+| `transcript_quality.py` | ~120 | Pre-summarize transcript quality scoring heuristics |
+| `ledger.py` | ~120 | Append-only work ledger: WorkTimer + record_operation |
+| `hashing.py` | ~30 | SHA-256 content hashing for staleness detection |
 | `artist_prompt.py` | 50 | Artist prompt building |
 | `__init__.py` | 8 | Package init |
 | `init_db.py` | 7 | DB initialization entry point |
 
-### Tests (31 modules, 487 tests)
+### Tests (37 modules, 660 tests)
 
 | Module | Tests | Purpose |
 |--------|-------|---------|
@@ -545,9 +671,14 @@ Accessor functions: `get_youtube_config()`, `get_llm_config()`, `get_app_config(
 | `test_paths.py` | 13 | Path construction, integration with Storage.urllist_path |
 | `test_yt_dlp_util.py` | 18 | Rate-limit config, cookies, delays, PO token, auth |
 | `test_prompts.py` | 11 | BAML scoring adapter, anti-hallucination content checks (summarizer + score.baml) |
+| `test_fts_search.py` | 26 | FTS5 search: storage, migration, triggers, CLI, JSON |
+| `test_exporter.py` | ~25 | Export JSON/CSV: chunking, manifest, compression, batch fetch |
+| `test_transcript_quality.py` | ~15 | Transcript quality heuristics, CLI integration |
+| `test_ledger.py` | ~12 | Work ledger: WorkTimer, record_operation, history CLI |
+| `test_hashing.py` | ~8 | content_hash, staleness detection, stale counts |
 | Others | ~30+ | Fetcher, transcriber, summarizer, edge cases |
 
-### Architecture decisions (14 ADRs)
+### Architecture decisions (15 ADRs)
 
 | ADR | Title |
 |-----|-------|
@@ -565,19 +696,18 @@ Accessor functions: `get_youtube_config()`, `get_llm_config()`, `get_app_config(
 | 0012 | Pipeline parallelism for bulk transcribe + summarize |
 | 0013 | Long-transcript summarization strategies and quality scoring |
 | 0014 | BAML prompt management and hallucination guardrails |
+| 0015 | FTS5 full-text transcript search |
 
 ---
 
 ## Parking Lot (Future Sessions)
 
-These items were explicitly deferred by the user. See [PARKING_LOT.md](PARKING_LOT.md) for the full prioritized list.
+24 of 30 items resolved. See [PARKING_LOT.md](PARKING_LOT.md) for the full prioritized list.
 
-Key items:
-1. Export/backup (P1)
-2. MCP server dependency fix (P1)
-3. Transcript quality scoring — pre-summarize (P2, distinct from summary scoring done in Session 10)
-4. Performance language migration (P3)
-5. Licensing and payment model (P3)
-6. Usage metrics tracking (P3)
-7. Shippable product readiness (P3)
-8. Blog post (P3)
+Remaining items:
+1. Single-pass transcript scoring (#29, P3) — pure refactor, ~1-5ms savings
+2. Staleness hash caching (#30, P3) — backfill NULL hashes for legacy summaries
+3. Licensing and payment model (#13, P3)
+4. Usage metrics tracking (#14, P3)
+5. Shippable product readiness (#15, P3)
+6. Blog post (#16, P3)
