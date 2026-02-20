@@ -95,15 +95,10 @@ DB size:      12.4 MB
 
 ---
 
-### 7. MCP server: decouple or fix dependency `[suggestion]`
+### ~~7. MCP server: decouple or fix dependency~~ `[suggestion]` ✅ Done (Session 22)
 **Why:** The `mcp>=1.0.0` dependency causes `uv` resolution failures because `mcp` requires Python >=3.10 but `requires-python` says >=3.9. The MCP server is optional but it breaks the default install.
 
-**Scope:**
-- Option A: Move MCP to a separate package (`yt-artist-mcp`)
-- Option B: Change `requires-python` to `>=3.10`
-- Option C: Make `mcp` optional dependency that gracefully degrades
-
-**Effort:** Small for option B/C, medium for option A.
+**What was done:** Option C — PEP 508 environment marker (`mcp>=1.0.0; python_version>='3.10'`) in pyproject.toml. On Python 3.9, mcp is skipped; on 3.10+, installed normally. `mcp_server.py` already had lazy import with graceful `SystemExit` on `ImportError`.
 
 ---
 

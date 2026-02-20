@@ -22,7 +22,7 @@ dev = [
     "ruff>=0.4.0",
 ]
 mcp = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0; python_version>='3.10'",
 ]
 search = [
     "duckduckgo-search>=6.0",
