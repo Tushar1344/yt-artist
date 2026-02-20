@@ -78,11 +78,16 @@ def _file_size(path: Path) -> int:
 
 
 def _build_video_entry(
-    storage: Storage,
     video: dict[str, Any],
+    transcript: dict[str, Any] | None,
+    summaries: list[dict[str, Any]],
     include_vtt: bool = False,
 ) -> dict[str, Any]:
-    """Build a video dict with nested transcript and summaries."""
+    """Build a video dict with nested transcript and summaries.
+
+    Accepts pre-fetched *transcript* and *summaries* to avoid per-video
+    database queries (batch-fetch at the call site instead).
+    """
     entry: dict[str, Any] = {
         "id": video["id"],
         "url": video["url"],
@@ -92,19 +97,18 @@ def _build_video_entry(
         "summaries": [],
     }
 
-    t = storage.get_transcript(video["id"])
-    if t:
+    if transcript:
         t_entry: dict[str, Any] = {
-            "raw_text": t["raw_text"],
-            "format": t.get("format", ""),
-            "quality_score": t.get("quality_score"),
-            "created_at": t.get("created_at", ""),
+            "raw_text": transcript["raw_text"],
+            "format": transcript.get("format", ""),
+            "quality_score": transcript.get("quality_score"),
+            "created_at": transcript.get("created_at", ""),
         }
-        if include_vtt and t.get("raw_vtt"):
-            t_entry["raw_vtt"] = t["raw_vtt"]
+        if include_vtt and transcript.get("raw_vtt"):
+            t_entry["raw_vtt"] = transcript["raw_vtt"]
         entry["transcript"] = t_entry
 
-    for s in storage.get_summaries_for_video(video["id"]):
+    for s in summaries:
         entry["summaries"].append(
             {
                 "prompt_id": s["prompt_id"],
@@ -164,10 +168,20 @@ def export_json(
             if not chunk_videos:
                 continue
 
+            chunk_ids = [v["id"] for v in chunk_videos]
+            transcripts_map = storage.get_transcripts_for_videos(chunk_ids)
+            summaries_map = storage.get_summaries_for_videos(chunk_ids)
+
             video_entries = []
             chunk_prompt_ids: set[str] = set()
             for v in chunk_videos:
-                entry = _build_video_entry(storage, v, include_vtt=include_vtt)
+                vid = v["id"]
+                entry = _build_video_entry(
+                    v,
+                    transcripts_map.get(vid),
+                    summaries_map.get(vid, []),
+                    include_vtt=include_vtt,
+                )
                 video_entries.append(entry)
                 if entry["transcript"]:
                     n_transcripts += 1
@@ -309,7 +323,12 @@ def export_csv(
         videos_path = _zip_file(videos_path)
     file_sizes[videos_path.name] = _file_size(videos_path)
 
-    # Transcripts (streamed per video to avoid loading all into memory)
+    # Batch-fetch transcripts and summaries (eliminates N+1 per-video queries)
+    all_video_ids = [v["id"] for v in all_videos]
+    transcripts_map = storage.get_transcripts_for_videos(all_video_ids)
+    summaries_map = storage.get_summaries_for_videos(all_video_ids)
+
+    # Transcripts
     t_fields = _TRANSCRIPT_FIELDS_VTT if include_vtt else _TRANSCRIPT_FIELDS
     transcripts_path = export_dir / "transcripts.csv"
     transcripts_path.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +337,7 @@ def export_csv(
         writer = csv.DictWriter(f, fieldnames=t_fields, extrasaction="ignore")
         writer.writeheader()
         for v in all_videos:
-            t = storage.get_transcript(v["id"])
+            t = transcripts_map.get(v["id"])
             if t:
                 writer.writerow(dict(t))
                 n_transcripts += 1
@@ -326,14 +345,14 @@ def export_csv(
         transcripts_path = _zip_file(transcripts_path)
     file_sizes[transcripts_path.name] = _file_size(transcripts_path)
 
-    # Summaries (streamed per video)
+    # Summaries
     summaries_path = export_dir / "summaries.csv"
     n_summaries = 0
     with open(summaries_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for v in all_videos:
-            for s in storage.get_summaries_for_video(v["id"]):
+            for s in summaries_map.get(v["id"], []):
                 writer.writerow(dict(s))
                 n_summaries += 1
     if compress:
@@ -347,7 +366,7 @@ def export_csv(
         prompts_path = _zip_file(prompts_path)
     file_sizes[prompts_path.name] = _file_size(prompts_path)
 
-    # Artist stats
+    # Artist stats (reuse batch-fetched data — no extra queries)
     artist_stats = []
     for a in artists:
         aid = a["id"]
@@ -356,8 +375,8 @@ def export_csv(
             {
                 "id": aid,
                 "videos": len(vids),
-                "transcripts": sum(1 for v in vids if storage.get_transcript(v["id"])),
-                "summaries": sum(len(storage.get_summaries_for_video(v["id"])) for v in vids),
+                "transcripts": sum(1 for v in vids if v["id"] in transcripts_map),
+                "summaries": sum(len(summaries_map.get(v["id"], [])) for v in vids),
             }
         )
 

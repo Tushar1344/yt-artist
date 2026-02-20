@@ -247,15 +247,15 @@ Hybrid approach: moved SQL into 11 new Storage methods (`create_job`, `update_jo
 
 ---
 
-### 28. Fix N+1 query pattern in exporter.py `[profiling]`
-**Why:** `export_json()` and `export_csv()` issue 2 DB queries per video (transcript + summaries). For a 2000-video channel, that's ~4000 SQLite round-trips. This is the actual export performance bottleneck.
+### ~~28. Fix N+1 query pattern in exporter.py~~ `[profiling]` ✅ Done (Session 22)
+**Why:** `export_json()` and `export_csv()` issued 2-4 DB queries per video. For 500 videos, `export_csv` made ~2000 queries (4 per-video loops, two redundant re-fetches for stats).
 
-**Scope:**
-- Batch-load transcripts and summaries via JOINs instead of per-video queries
-- Chunk by artist or batch of video IDs
-- Keep streaming/memory-efficient design (don't load all transcripts at once)
-
-**Effort:** Small-medium. SQL refactor, no new dependencies.
+**What was done:**
+1. **Batch storage methods** — `get_transcripts_for_videos(video_ids)` and `get_summaries_for_videos(video_ids)` using `_execute_chunked_in()` for lists >500
+2. **Refactored `_build_video_entry()`** — accepts pre-fetched transcript/summaries instead of querying per-video
+3. **`export_json()`** — batch-fetches per chunk (2 queries per chunk instead of 2×chunk_size)
+4. **`export_csv()`** — batch-fetches once, reuses for CSV rows and artist stats (2 queries total instead of ~2000)
+5. **9 new batch tests** in test_storage.py
 
 ---
 

@@ -596,6 +596,22 @@ class Storage:
         finally:
             conn.close()
 
+    def get_transcripts_for_videos(self, video_ids: List[str]) -> Dict[str, TranscriptRow]:
+        """Batch-fetch transcripts for multiple videos.
+
+        Returns ``{video_id: TranscriptRow}`` for every *video_id* that has a
+        transcript.  Uses :meth:`_execute_chunked_in` for large lists.
+        """
+        if not video_ids:
+            return {}
+        with self._read_conn() as conn:
+            rows = self._execute_chunked_in(
+                conn,
+                "SELECT * FROM transcripts WHERE video_id IN ({placeholders})",
+                video_ids,
+            )
+        return {row["video_id"]: row for row in rows}
+
     def list_transcripts(
         self,
         artist_id: Optional[str] = None,
@@ -794,6 +810,25 @@ class Storage:
             return cur.fetchall()  # type: ignore[return-value]
         finally:
             conn.close()
+
+    def get_summaries_for_videos(self, video_ids: List[str]) -> Dict[str, List[SummaryRow]]:
+        """Batch-fetch summaries for multiple videos.
+
+        Returns ``{video_id: [SummaryRow, ...]}`` grouped by video.
+        Uses :meth:`_execute_chunked_in` for large lists.
+        """
+        if not video_ids:
+            return {}
+        with self._read_conn() as conn:
+            rows = self._execute_chunked_in(
+                conn,
+                "SELECT * FROM summaries WHERE video_id IN ({placeholders}) ORDER BY created_at",
+                video_ids,
+            )
+        result: Dict[str, List[SummaryRow]] = {}
+        for row in rows:
+            result.setdefault(row["video_id"], []).append(row)
+        return result
 
     def list_summaries(self, artist_id: Optional[str] = None) -> List[SummaryRow]:
         """Return all summaries, optionally filtered to an artist's videos."""

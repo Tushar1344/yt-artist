@@ -378,6 +378,87 @@ class TestChunkedInQueries:
         returned_ids = {r["video_id"] for r in result}
         assert returned_ids == set(ids[:600])
 
+
+# ---------------------------------------------------------------------------
+# Batch fetch tests (exporter N+1 fix)
+# ---------------------------------------------------------------------------
+
+
+class TestBatchFetchMethods:
+    """Verify batch transcript/summary fetching used by exporter."""
+
+    # -- get_transcripts_for_videos --
+
+    def test_transcripts_batch_empty(self, store):
+        assert store.get_transcripts_for_videos([]) == {}
+
+    def test_transcripts_batch_basic(self, store):
+        ids = _seed_artist_and_videos(store, 5)
+        for vid in ids[:3]:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+        result = store.get_transcripts_for_videos(ids)
+        assert len(result) == 3
+        assert set(result.keys()) == set(ids[:3])
+        assert result[ids[0]]["raw_text"] == f"text for {ids[0]}"
+
+    def test_transcripts_batch_missing(self, store):
+        ids = _seed_artist_and_videos(store, 3)
+        result = store.get_transcripts_for_videos(ids)
+        assert result == {}
+
+    def test_transcripts_batch_over_limit(self, store):
+        n = _IN_BATCH_SIZE * 2 + 100
+        ids = _seed_artist_and_videos(store, n)
+        transcribed = ids[::2]  # every other
+        for vid in transcribed:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+        result = store.get_transcripts_for_videos(ids)
+        assert len(result) == len(transcribed)
+
+    # -- get_summaries_for_videos --
+
+    def test_summaries_batch_empty(self, store):
+        assert store.get_summaries_for_videos([]) == {}
+
+    def test_summaries_batch_basic(self, store):
+        ids = _seed_artist_and_videos(store, 5)
+        store.upsert_prompt(prompt_id="p1", name="p1", template="test")
+        for vid in ids[:3]:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+            store.upsert_summary(video_id=vid, prompt_id="p1", content=f"summary {vid}")
+        result = store.get_summaries_for_videos(ids)
+        assert len(result) == 3
+        assert all(len(v) == 1 for v in result.values())
+        assert result[ids[0]][0]["prompt_id"] == "p1"
+
+    def test_summaries_batch_multiple_prompts(self, store):
+        ids = _seed_artist_and_videos(store, 3)
+        store.upsert_prompt(prompt_id="p1", name="p1", template="t1")
+        store.upsert_prompt(prompt_id="p2", name="p2", template="t2")
+        for vid in ids:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+            store.upsert_summary(video_id=vid, prompt_id="p1", content=f"s1 {vid}")
+            store.upsert_summary(video_id=vid, prompt_id="p2", content=f"s2 {vid}")
+        result = store.get_summaries_for_videos(ids)
+        assert len(result) == 3
+        assert all(len(v) == 2 for v in result.values())
+
+    def test_summaries_batch_missing(self, store):
+        ids = _seed_artist_and_videos(store, 3)
+        result = store.get_summaries_for_videos(ids)
+        assert result == {}
+
+    def test_summaries_batch_over_limit(self, store):
+        n = _IN_BATCH_SIZE * 2 + 100
+        ids = _seed_artist_and_videos(store, n)
+        store.upsert_prompt(prompt_id="p1", name="p1", template="test")
+        summarized = ids[:600]
+        for vid in summarized:
+            store.save_transcript(video_id=vid, raw_text=f"text for {vid}")
+            store.upsert_summary(video_id=vid, prompt_id="p1", content=f"sum {vid}")
+        result = store.get_summaries_for_videos(ids)
+        assert len(result) == 600
+
     # -- provenance columns --
 
     def test_upsert_summary_with_provenance(self, store):

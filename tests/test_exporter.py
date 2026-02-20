@@ -135,7 +135,9 @@ class TestBuildVideoEntry:
         _seed_summary(store, "v1")
 
         video = store.list_videos(artist_id="UC_test")[0]
-        entry = _build_video_entry(store, video)
+        transcript = store.get_transcript("v1")
+        summaries = store.get_summaries_for_video("v1")
+        entry = _build_video_entry(video, transcript, summaries)
         assert entry["id"] == "v1"
         assert entry["transcript"]["raw_text"] == "hello"
         assert len(entry["summaries"]) == 1
@@ -146,7 +148,7 @@ class TestBuildVideoEntry:
         _seed_video(store, "v1")
 
         video = store.list_videos(artist_id="UC_test")[0]
-        entry = _build_video_entry(store, video)
+        entry = _build_video_entry(video, None, [])
         assert entry["transcript"] is None
         assert entry["summaries"] == []
 
@@ -157,10 +159,11 @@ class TestBuildVideoEntry:
         _seed_transcript(store, "v1", text="Hello", raw_vtt=raw_vtt)
 
         video = store.list_videos(artist_id="UC_test")[0]
-        entry_no_vtt = _build_video_entry(store, video, include_vtt=False)
+        transcript = store.get_transcript("v1")
+        entry_no_vtt = _build_video_entry(video, transcript, [], include_vtt=False)
         assert "raw_vtt" not in entry_no_vtt["transcript"]
 
-        entry_vtt = _build_video_entry(store, video, include_vtt=True)
+        entry_vtt = _build_video_entry(video, transcript, [], include_vtt=True)
         assert entry_vtt["transcript"]["raw_vtt"] == raw_vtt
 
 
